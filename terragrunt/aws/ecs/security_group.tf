@@ -48,3 +48,17 @@ resource "aws_security_group_rule" "ecs_egress_docdb" {
 ###
 # Traffic to DocumentDB should only come from ECS
 ###
+
+data "aws_docdb_cluster" "docdb" {
+  cluster_identifier = split(".", var.docdb_endpoint)[0]
+}
+
+resource "aws_security_group_rule" "docdb_ingress_ecs" {
+  description              = "Allow DocumentDB security group to receive traffic from ECS"
+  type                     = "ingress"
+  from_port                = 27017
+  to_port                  = 27017
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.ecs_tasks.id
+  security_group_id        = tolist(data.aws_docdb_cluster.docdb.vpc_security_group_ids)[0]
+}
