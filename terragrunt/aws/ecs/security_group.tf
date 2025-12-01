@@ -22,22 +22,15 @@ resource "aws_security_group_rule" "ecs_ingress_lb" {
   security_group_id        = aws_security_group.ecs_tasks.id
 }
 
-resource "aws_security_group_rule" "ecs_egress_https" {
-  description       = "Allow ECS security group to send HTTPS traffic"
-  type              = "egress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.ecs_tasks.id
-}
+resource "aws_security_group_rule" "ecs_egress_all" {
+  #checkov:skip=CKV_AWS_382 # We need to allow all traffic for ECS to work
+  description = "Allow ECS security group to send all traffic"
+  type        = "egress"
+  from_port   = -1
+  to_port     = -1
+  protocol    = "-1"
+  depends_on  = [aws_security_group.ecs_tasks]
 
-resource "aws_security_group_rule" "ecs_egress_http" {
-  description       = "Allow ECS security group to send HTTP traffic"
-  type              = "egress"
-  from_port         = 80
-  to_port           = 80
-  protocol          = "tcp"
   cidr_blocks       = ["0.0.0.0/0"]
   security_group_id = aws_security_group.ecs_tasks.id
 }
