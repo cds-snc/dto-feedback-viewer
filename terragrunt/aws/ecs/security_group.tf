@@ -35,22 +35,18 @@ resource "aws_security_group_rule" "ecs_egress_all" {
   security_group_id = aws_security_group.ecs_tasks.id
 }
 
-resource "aws_security_group_rule" "ecs_egress_docdb" {
-  description       = "Allow ECS security group to send traffic to DocumentDB"
-  type              = "egress"
-  from_port         = 27017
-  to_port           = 27017
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.ecs_tasks.id
-}
-
 ###
 # Traffic to DocumentDB should only come from ECS
 ###
 
-data "aws_docdb_cluster" "docdb" {
-  cluster_identifier = split(".", var.docdb_endpoint)[0]
+# Look up the DocumentDB security group by name (created by dto-feedback-cj)
+data "aws_security_group" "docdb" {
+  vpc_id = var.vpc_id
+
+  filter {
+    name   = "group-name"
+    values = ["feedback-cronjob-docdb-sg"]
+  }
 }
 
 resource "aws_security_group_rule" "docdb_ingress_ecs" {
@@ -60,5 +56,5 @@ resource "aws_security_group_rule" "docdb_ingress_ecs" {
   to_port                  = 27017
   protocol                 = "tcp"
   source_security_group_id = aws_security_group.ecs_tasks.id
-  security_group_id        = tolist(data.aws_docdb_cluster.docdb.vpc_security_group_ids)[0]
+  security_group_id        = data.aws_security_group.docdb.id
 }
