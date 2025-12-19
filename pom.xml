@@ -21,7 +21,7 @@
 
         <!-- CRITICAL: Override vulnerable dependencies with patched versions -->
         <!-- Fixes Log4Shell (CVE-2021-44228) and related Log4j vulnerabilities -->
-        <log4j2.version>2.17.1</log4j2.version>
+        <log4j2.version>2.25.3</log4j2.version>
 
         <!-- Fixes Spring Framework RCE vulnerabilities (Spring4Shell, etc.) -->
         <spring-framework.version>5.2.25.RELEASE</spring-framework.version>
