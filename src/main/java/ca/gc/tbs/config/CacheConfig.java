@@ -14,6 +14,6 @@ public class CacheConfig {
 
   @Bean
   public CacheManager cacheManager() {
-    return new ConcurrentMapCacheManager("problemDates", "distinctUrls", "processedProblems", "gcIpCache");
+    return new ConcurrentMapCacheManager("problemDates", "distinctUrls", "processedProblems");
   }
 }

@@ -1,42 +1,53 @@
 package ca.gc.tbs.controller;
 
+import java.io.IOException;
+import java.io.Writer;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+import javax.management.Query;
+import javax.servlet.ServletOutputStream;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.validation.Valid;
+
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.xssf.streaming.SXSSFSheet;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.datatables.DataTablesInput;
+import org.springframework.data.mongodb.datatables.DataTablesOutput;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.servlet.ModelAndView;
+
 import ca.gc.tbs.domain.TopTaskSurvey;
 import ca.gc.tbs.domain.User;
 import ca.gc.tbs.repository.TopTaskRepository;
 import ca.gc.tbs.security.JWTUtil;
 import ca.gc.tbs.service.ProblemDateService;
 import ca.gc.tbs.service.UserService;
-import java.io.IOException;
-import java.io.Writer;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
-import java.util.*;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-import javax.servlet.ServletOutputStream;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.validation.Valid;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.xssf.streaming.SXSSFSheet;
-import org.apache.poi.xssf.streaming.SXSSFWorkbook;
-import org.bson.Document;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.datatables.DataTablesInput;
-import org.springframework.data.mongodb.datatables.DataTablesOutput;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Controller;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.bind.annotation.RequestMethod;
-import org.springframework.web.servlet.ModelAndView;
 
 @Controller
 public class TopTaskController {
@@ -244,12 +255,16 @@ public class TopTaskController {
     institutionMappings.put(
         "HC", Arrays.asList("HC", "SC", "HEALTH CANADA", "SANTÉ CANADA", "HC / SC"));
     institutionMappings.put(
-        "HICC",
+        "INFC",
         Arrays.asList(
             "HICC",
             "LICC",
             "HOUSING, INFRASTRUCTURE AND COMMUNITIES CANADA",
             "LOGEMENT, INFRASTRUCTURES ET COLLECTIVITÉS CANADA",
+            "INFC / INFC",
+            "INFC",
+            "INFRASTRUCTURE CANADA",
+            "INFRASTRUCTURE CANADA",
             "HICC / LICC"));
     institutionMappings.put(
         "IOGC",
@@ -498,7 +513,7 @@ public class TopTaskController {
     String includeCommentsOnlyParam = request.getParameter("includeCommentsOnly");
     boolean includeCommentsOnly = includeCommentsOnlyParam != null && includeCommentsOnlyParam.equals("true");
     String taskCompletionFilterVal = request.getParameter("taskCompletion");
-
+    String comments = request.getParameter("comments");
 
     // Log specific filter values
     LOG.info("Department: {}", departmentFilterVal);
@@ -570,6 +585,16 @@ public class TopTaskController {
           if (!allowed.isEmpty()) {
               criteria.and("taskCompletion").in(allowed);
           }
+      }
+      // Comments filtering
+      if (comments != null && !comments.trim().isEmpty() && !"null".equalsIgnoreCase(comments. trim())) {
+          String escapedComment = escapeSpecialRegexCharacters(comments.trim());
+          List<Criteria> commentCriteria = new ArrayList<>();
+          commentCriteria.add(Criteria.where("taskImproveComment").regex(escapedComment, "i"));
+          commentCriteria.add(Criteria.where("taskWhyNotComment").regex(escapedComment, "i"));
+          commentCriteria.add(Criteria.where("taskOther").regex(escapedComment, "i"));
+
+          criteria.andOperator(new Criteria().andOperator(criteria, new Criteria().orOperator(commentCriteria.toArray(new Criteria[0]))));
       }
 
 
@@ -817,6 +842,7 @@ public class TopTaskController {
     String language = request.getParameter("language");
     String startDate = request.getParameter("startDate");
     String endDate = request.getParameter("endDate");
+    String comments = request.getParameter("comments");
     boolean includeCommentsOnly = Boolean.parseBoolean(request.getParameter("includeCommentsOnly"));
 
     Criteria criteria = Criteria.where("processed").is("true");
@@ -867,6 +893,17 @@ public class TopTaskController {
     } else if (!combinedOrCriteria.isEmpty()) {
       criteria.andOperator(new Criteria().orOperator(combinedOrCriteria.toArray(new Criteria[0])));
     }
+
+      if (comments != null && !comments.isEmpty()) {
+          String escapedComment = escapeSpecialRegexCharacters(comments);
+          List<Criteria> commentCriteria = new ArrayList<>();
+          commentCriteria.add(Criteria.where("taskImproveComment").regex(escapedComment, "i"));
+          commentCriteria.add(Criteria.where("taskWhyNotComment").regex(escapedComment, "i"));
+          commentCriteria.add(Criteria.where("themeOther").regex(escapedComment, "i"));
+          commentCriteria.add(Criteria. where("taskOther").regex(escapedComment, "i"));
+
+          criteria.andOperator(new Criteria().andOperator(criteria, new Criteria().orOperator(commentCriteria.toArray(new Criteria[0]))));
+      }
 
     return criteria;
   }
@@ -1085,9 +1122,25 @@ public class TopTaskController {
   }
 
   private Criteria applyDepartmentFilter(Criteria criteria, String department) {
-    // First try direct case-insensitive match for exact database values
+    List<String> variations = new ArrayList<>();
+      for (Map.Entry<String, List<String>> entry : institutionMappings.entrySet()) {
+          List<String> mappingValues = entry.getValue();
+          if (mappingValues.stream().anyMatch(v -> v.equalsIgnoreCase(department))) {
+              variations.addAll(mappingValues);
+              break;
+          }
+      }
+      if (variations.isEmpty()) {
     criteria.and("dept").regex("^" + Pattern.quote(department) + "$", "i");
-    return criteria;
+      } else {
+          List<Criteria> deptCriteria = new ArrayList<>();
+          for (String variation :  variations) {
+              deptCriteria.add(Criteria.where("dept").regex("^" + Pattern.quote(variation) + "$", "i"));
+          }
+          criteria.orOperator(deptCriteria.toArray(new Criteria[0]));
+      }
+
+      return criteria;
   }
 
   @GetMapping(value = "/topTaskSurvey")
@@ -1104,14 +1157,68 @@ public class TopTaskController {
 
   @GetMapping("/taskNames")
   @ResponseBody
-  public List<String> getTaskNames(@RequestParam(name = "search", required = false) String search) {
-    if (search != null && !search.isEmpty()) {
-      // Use the new repository method to filter page titles based on the search term
-      return topTaskRepository.findTaskTitlesBySearch(search);
-    } else {
-      // Return all page titles if no search term is provided
-      return topTaskRepository.findDistinctTaskNames();
+  public List<String> getTaskNames(
+      @RequestParam(name = "search", required = false) String search,
+      @RequestParam(name = "department", required = false) String department,
+      @RequestParam(name = "theme", required = false) String theme,
+      @RequestParam(name = "group", required = false) String group,
+      @RequestParam(name = "language", required = false) String language,
+      @RequestParam(name = "startDate", required = false) String startDate,
+      @RequestParam(name = "endDate", required = false) String endDate) {
+
+    // Build criteria based on applied filters
+    Criteria criteria = Criteria.where("processed").is("true");
+    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+
+    // Apply date range filter
+    if (startDate != null && endDate != null) {
+      LocalDate start = LocalDate.parse(startDate, formatter);
+      LocalDate end = LocalDate.parse(endDate, formatter);
+      criteria.and("dateTime").gte(start.format(formatter)).lte(end.format(formatter));
     }
+
+    // Apply language filter
+    if (language != null && !language.isEmpty()) {
+      criteria.and("language").is(language);
+    }
+
+    // Apply theme filter
+    if (theme != null && !theme.isEmpty()) {
+      String cleanedTheme = theme.trim().replaceAll("\\s+", " ");
+      criteria.and("theme").regex(Pattern.quote(cleanedTheme), "i");
+    }
+
+    // Apply group filter
+    if (group != null && !group.isEmpty()) {
+      criteria.and("grouping").is(group);
+    }
+
+    // Apply department filter
+    if (department != null && !department.isEmpty()) {
+      Criteria departmentCriteria = applyDepartmentFilter(new Criteria(), department);
+      criteria = new Criteria().andOperator(criteria, departmentCriteria);
+    }
+
+    if (search != null && !search.isEmpty()) {
+      // Use the new repository method with filters applied
+      return topTaskRepository.findTaskNamesBySearchWithFilters(search, criteria);
+    } else {
+      // Return all tasks matching the current filters (without search term)
+      // This uses the existing findDistinctTaskCountsWithFilters method
+      List<Map> distinctTaskCounts = topTaskRepository.findDistinctTaskCountsWithFilters(criteria);
+      return distinctTaskCounts.stream()
+          .map(map -> (String) map.get("_id"))
+          .sorted()
+          .collect(Collectors.toList());
+    }
+  }
+
+  private String escapeSpecialRegexCharacters(String input) {
+      if (input == null) {
+          return null;
+      }
+      // Escape all regex metacharacters
+      return input.replaceAll("([\\\\.|^$|()\\[\\]{}*+?])", "\\\\$1");
   }
 
   public UserService getUserService() {

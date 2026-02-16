@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:th="http://www.thymeleaf.org"
+	xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout" layout:decorate="~{wide_en}" lang="en">
+
+<head>
+	<link
+		href="https://cdn.datatables.net/v/dt/jq-3.7.0/jszip-3.10.1/dt-2.3.2/b-3.2.0/b-html5-3.2.0/cr-2.0.4/fh-4.0.1/r-3.0.3/datatables.min.css"
+		rel="stylesheet" type="text/css" />
+	<link rel="stylesheet" type="text/css" href="/css/keywords_styles.css" />
+</head>
+
+<th:block layout:fragment="content">
+	<main class="container">
+		<div class="keywords-header">
+			<h1 id="wb-cont">Keywords Management</h1>
+			<p class="lead">Manage content filtering keywords including profanity, threats, allowed words, and error
+				keywords.</p>
+		</div>
+
+		<!-- Quick Filters -->
+		<div class="filter-section-compact">
+			<div class="filter-title">Filter by:</div>
+			<div class="filter-controls">
+				<div class="filter-item">
+					<label for="filterType">Type</label>
+					<select id="filterType" class="form-control">
+						<option value="">All Types</option>
+						<option value="profanity">Profanity</option>
+						<option value="threat">Threat</option>
+						<option value="allowed">Allowed</option>
+						<option value="error">Error</option>
+					</select>
+				</div>
+				<div class="filter-item">
+					<label for="filterLanguage">Language</label>
+					<select id="filterLanguage" class="form-control">
+						<option value="">All Languages</option>
+						<option value="en">English</option>
+						<option value="fr">French</option>
+						<option value="both">Both</option>
+					</select>
+				</div>
+				<div class="filter-item">
+					<label for="filterStatus">Status</label>
+					<select id="filterStatus" class="form-control">
+						<option value="">All Statuses</option>
+						<option value="active">Active</option>
+						<option value="inactive">Inactive</option>
+					</select>
+				</div>
+				<div class="filter-item">
+					<label for="filterSearch">Search</label>
+					<input type="text" id="filterSearch" class="form-control" placeholder="Filter by keyword">
+				</div>
+				<div class="filter-item">
+					<button id="clearFilters" class="btn-clear">Clear Filters</button>
+				</div>
+			</div>
+		</div>
+
+		<!-- Action buttons -->
+		<div class="action-buttons">
+			<button id="addNewBtn" class="btn btn-primary">
+				<span class="glyphicon glyphicon-plus"></span> Add New Keyword
+			</button>
+			<button id="exportBtn" class="btn btn-success">
+				<span class="glyphicon glyphicon-download-alt"></span> Export to CSV
+			</button>
+		</div>
+
+		<!-- Add/Edit modal -->
+		<div id="editModal" class="modal-overlay">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h2 id="modalTitle">Add New Keyword</h2>
+				</div>
+				<form id="editForm">
+					<div class="modal-body">
+						<input type="hidden" id="editId" value="">
+
+						<div id="errorMessage" class="alert alert-danger" style="display: none;"></div>
+						<div id="successMessage" class="alert alert-success" style="display: none;"></div>
+
+						<div class="form-group">
+							<label for="editWord">Word <span style="color: red;">*</span></label>
+							<input type="text" class="form-control" id="editWord" placeholder="Enter keyword" required
+								autofocus>
+							<span class="help-block">The word will be automatically converted to lowercase.</span>
+						</div>
+
+						<div class="row">
+							<div class="col-sm-6">
+								<div class="form-group">
+									<label for="editLanguage">Language <span style="color: red;">*</span></label>
+									<select class="form-control" id="editLanguage" required>
+										<option value="en">English</option>
+										<option value="fr">French</option>
+										<option value="both">Both Languages</option>
+									</select>
+								</div>
+							</div>
+							<div class="col-sm-6">
+								<div class="form-group">
+									<label for="editType">Type <span style="color: red;">*</span></label>
+									<select class="form-control" id="editType" required>
+										<option value="profanity">Profanity</option>
+										<option value="threat">Threat</option>
+										<option value="allowed">Allowed</option>
+										<option value="error">Error</option>
+									</select>
+								</div>
+							</div>
+						</div>
+
+						<div class="checkbox">
+							<input type="checkbox" id="editActive" checked>
+							<label for="editActive">
+								<strong>Active</strong>
+								<span class="help-block">Inactive keywords won't be used for filtering</span>
+							</label>
+						</div>
+					</div>
+					<div class="modal-footer">
+						<button type="button" id="cancelBtn" class="btn btn-default">Cancel</button>
+						<button type="submit" class="btn btn-primary">Save Keyword</button>
+					</div>
+				</form>
+			</div>
+		</div>
+
+		<!-- Keywords table with scrollable body -->
+		<div class="keywords-table-wrapper">
+			<div class="table-scroll-container">
+				<table id="keywordsTable" class="wb-tables dataTable">
+					<thead>
+						<tr>
+							<th>Word</th>
+							<th>Language</th>
+							<th>Type</th>
+							<th>Status</th>
+							<th>Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr th:remove="tag" th:utext="${data}"></tr>
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</main>
+</th:block>
+
+<th:block layout:fragment="script">
+	<script
+		src="https://cdn.datatables.net/v/dt/jq-3.7.0/jszip-3.10.1/dt-2.3.2/b-3.2.0/b-html5-3.2.0/cr-2.0.4/fh-4.0.1/r-3.0.3/datatables.min.js"></script>
+	<script src="/js/keywords_en.js"></script>
+</th:block>
+
+</html>

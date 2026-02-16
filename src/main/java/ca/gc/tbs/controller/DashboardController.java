@@ -1,22 +1,37 @@
 package ca.gc.tbs.controller;
 
-import ca.gc.tbs.domain.Problem;
-import ca.gc.tbs.repository.ProblemRepository;
-import ca.gc.tbs.service.ErrorKeywordService;
-import ca.gc.tbs.service.ProblemCacheService;
-import ca.gc.tbs.service.ProblemDateService;
-import ca.gc.tbs.service.UserService;
-import org.bson.Document;
-import org.slf4j.Logger;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.AbstractMap;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+import javax.management.Query;
+import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
+
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.aggregation.*;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationResults;
+import org.springframework.data.mongodb.core.aggregation.GroupOperation;
+import org.springframework.data.mongodb.core.aggregation.MatchOperation;
+import org.springframework.data.mongodb.core.aggregation.SortOperation;
 import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.datatables.DataTablesInput;
 import org.springframework.data.mongodb.datatables.DataTablesOutput;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -26,14 +41,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.ModelAndView;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.validation.Valid;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
-import java.util.stream.Collectors;
+import ca.gc.tbs.domain.Problem;
+import ca.gc.tbs.repository.ProblemRepository;
+import ca.gc.tbs.service.ErrorKeywordService;
+import ca.gc.tbs.service.ProblemCacheService;
+import ca.gc.tbs.service.ProblemDateService;
+import ca.gc.tbs.service.UserService;
 
 @Controller
 public class DashboardController {
@@ -251,7 +264,10 @@ public class DashboardController {
         institutionMappings.put(
                 "HC", Arrays.asList("HC", "SC", "HEALTH CANADA", "SANTÉ CANADA", "HC/SC"));
         institutionMappings.put(
-                "INFC", Arrays.asList("INFC", "INFC", "INFRASTRUCTURE CANADA", "INFRASTRUCTURE CANADA"));
+                "HICC", Arrays.asList(
+                        "HICC", "LICC", "HOUSING, INFRASTRUCTURE AND COMMUNITIES CANADA", "LOGEMENT, INFRASTRUCTURES ET COLLECTIVITÉS CANADA", "HICC/LICC"));
+        institutionMappings.put(
+                "INFC", Arrays.asList("INFC", "INFC", "INFRASTRUCTURE CANADA", "INFRASTRUCTURE CANADA", "INFC / INFC"));
         institutionMappings.put(
                 "IOGC",
                 Arrays.asList(
@@ -585,8 +601,58 @@ public class DashboardController {
     @EventListener(ApplicationReadyEvent.class)
     public void init() {
         LOGGER.info("DashboardController: Starting initial data fetch and cache population.");
-        problemCacheService.getProcessedProblems();
-        problemDateService.getProblemDates();
+        
+        // Preload dashboard totals for fast initial page load
+        try {
+            LOGGER.info("DashboardController: Calculating initial totalComments and totalPages...");
+            List<Problem> processedProblems = problemCacheService.getProcessedProblems();
+            problemDateService.getProblemDates();
+            
+            // Group by URL and problemDate to get merged problems
+            List<Problem> mergedProblems = new ArrayList<>(
+                processedProblems.stream()
+                    .collect(
+                        Collectors.groupingBy(
+                            p -> new AbstractMap.SimpleEntry<>(p.getUrl(), p.getProblemDate()),
+                            Collectors.collectingAndThen(
+                                Collectors.toList(),
+                                list -> {
+                                    Problem problem = new Problem();
+                                    problem.setUrl(list.get(0).getUrl());
+                                    problem.setProblemDate(list.get(0).getProblemDate());
+                                    problem.setUrlEntries(list.size());
+                                    problem.setInstitution(list.get(0).getInstitution());
+                                    problem.setTitle(list.get(0).getTitle());
+                                    problem.setLanguage(list.get(0).getLanguage());
+                                    problem.setSection(list.get(0).getSection());
+                                    problem.setTheme(list.get(0).getTheme());
+                                    return problem;
+                                })))
+                    .values());
+            
+            // Filter out future dates
+            LocalDate currentDate = LocalDate.now();
+            mergedProblems = mergedProblems.stream()
+                .filter(p -> isValidDate(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE))
+                .filter(p -> {
+                    LocalDate problemDate = LocalDate.parse(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE);
+                    return !problemDate.isAfter(currentDate);
+                })
+                .collect(Collectors.toList());
+            
+            // Merge problems with same URL (across different dates)
+            mergedProblems = mergeProblems(mergedProblems);
+            
+            // Calculate totals
+            totalComments = mergedProblems.stream().mapToInt(Problem::getUrlEntries).sum();
+            totalPages = mergedProblems.size();
+            
+            LOGGER.info("DashboardController: Preloaded totals - {} comments across {} pages", 
+                totalComments, totalPages);
+        } catch (Exception e) {
+            LOGGER.error("DashboardController: Error calculating initial totals", e);
+        }
+        
         LOGGER.info("DashboardController: Initial data fetch and cache population complete.");
     }
 
@@ -678,9 +744,6 @@ public class DashboardController {
             output.setRecordsTotal(groupedProblems.size());
             output.setRecordsFiltered(groupedProblems.size());
 
-            output.setRecordsTotal(totalComments);
-            output.setRecordsFiltered(totalComments);
-
             // Adjust institution names based on language (same as normal dashboard)
             setInstitution(output, pageLang);
 
@@ -736,8 +799,8 @@ public class DashboardController {
             DataTablesOutput<Problem> output = new DataTablesOutput<>();
             output.setData(groupedProblems);
             output.setDraw(input.getDraw());
-            output.setRecordsTotal(totalComments);
-            output.setRecordsFiltered(totalComments);
+            output.setRecordsTotal(groupedProblems.size());
+            output.setRecordsFiltered(groupedProblems.size());
 
 
             setInstitution(output, pageLang);
@@ -772,10 +835,9 @@ public class DashboardController {
                                     .values());
 
             LocalDate currentDate = LocalDate.now();
-            problems =
-                    problems.stream()
-                            .filter(
-                                    p -> {
+            problems = problems.stream()
+                            .filter(p -> isValidDate(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE))
+                            .filter(p -> {
                                         LocalDate problemDate =
                                                 LocalDate.parse(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE);
                                         return !problemDate.isAfter(currentDate); //was isBefore - changed to !isAfter for more entries including current date
@@ -807,9 +869,6 @@ public class DashboardController {
             output.setRecordsTotal(mergedProblems.size());
             output.setRecordsFiltered(mergedProblems.size());
 
-            output.setRecordsTotal(totalComments);
-            output.setRecordsFiltered(totalComments);
-
             // Adjust institution names based on language
             setInstitution(output, pageLang);
             long afterUsedMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
@@ -818,6 +877,16 @@ public class DashboardController {
 
         return output;
     }
+
+    private static boolean isValidDate(String value, DateTimeFormatter formatter) {
+        try {
+            LocalDate.parse(value, formatter);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     //Helper method for criteria building with filters
     private Criteria buildFilterCriteria(String startDate, String endDate, String theme,
                                          String section, String language, String url,
@@ -932,6 +1001,7 @@ public class DashboardController {
             LocalDate end = LocalDate.parse(endDate, formatter);
 
             return problems.stream()
+                    .filter(problem -> isValidDate(problem.getProblemDate(), formatter))
                     .filter(
                             problem -> {
                                 LocalDate problemDate = LocalDate.parse(problem.getProblemDate(), formatter);

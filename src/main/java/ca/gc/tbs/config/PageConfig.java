@@ -17,6 +17,9 @@ import org.springframework.web.servlet.resource.PathResourceResolver;
 @Configuration
 public class PageConfig implements WebMvcConfigurer {
 
+  @Value("${pagesuccess.pythonScriptPath}")
+  private String pythonScriptPath;
+
   @Bean
   public BCryptPasswordEncoder passwordEncoder() {
     BCryptPasswordEncoder bCryptPasswordEncoder = new BCryptPasswordEncoder();
@@ -44,5 +47,10 @@ public class PageConfig implements WebMvcConfigurer {
     registry
         .addResourceHandler("/templates/**") // « /templates/style.css
         .addResourceLocations("classpath:/templates/static/");
+
+    // File located on disk
+    registry
+        .addResourceHandler("/python/**")
+        .addResourceLocations("file://" + this.pythonScriptPath);
   }
 }
