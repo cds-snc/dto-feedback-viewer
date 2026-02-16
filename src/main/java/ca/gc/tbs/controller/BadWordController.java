@@ -493,7 +493,7 @@ public class BadWordController {
       
     } catch (Exception e) {
       LOG.error("Error importing CSV file", e);
-      return "Error: " + e.getMessage();
+      return "Error: Failed to import CSV file.";
     }
   }
 
