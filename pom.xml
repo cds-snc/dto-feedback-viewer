@@ -19,28 +19,6 @@
         <java.version>1.8</java.version>
     </properties>
 
-    <repositories>
-        <repository>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-            <id>bintray-gov-uk-notify-maven</id>
-            <name>bintray</name>
-            <url>https://dl.bintray.com/gov-uk-notify/maven</url>
-        </repository>
-    </repositories>
-
-    <pluginRepositories>
-        <pluginRepository>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-            <id>bintray-gov-uk-notify-maven</id>
-            <name>bintray-plugins</name>
-            <url>https://dl.bintray.com/gov-uk-notify/maven</url>
-        </pluginRepository>
-    </pluginRepositories>
-
     <dependencies>
         <dependency>
             <groupId>com.github.netfarmers</groupId>
