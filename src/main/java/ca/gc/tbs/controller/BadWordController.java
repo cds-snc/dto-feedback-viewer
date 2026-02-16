@@ -345,7 +345,7 @@ public class BadWordController {
       return "Success";
     } catch (Exception e) {
       LOG.error("Error updating badword entry", e);
-      return "Error: " + e.getMessage();
+      return "Error updating entry";
     }
   }
 
@@ -369,7 +369,7 @@ public class BadWordController {
       return "Success";
     } catch (Exception e) {
       LOG.error("Error deleting badword entry", e);
-      return "Error: " + e.getMessage();
+      return "Error deleting entry";
     }
   }
 
