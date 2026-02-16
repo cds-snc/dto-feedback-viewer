@@ -33,7 +33,7 @@ docker/.env
 *.iml
 .idea/
 .vscode/
-
+.settings
 # Kubernetes secrets
 kubernetes/feedback-viewer-ingress.yml
 
