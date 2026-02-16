@@ -13,7 +13,6 @@ import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.csv.CSVRecord;
-import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -369,7 +368,7 @@ public class BadWordController {
       return "Success";
     } catch (Exception e) {
       LOG.error("Error deleting badword entry", e);
-      return "Error deleting entry";
+      return "Error deleting badword entry";
     }
   }
 
