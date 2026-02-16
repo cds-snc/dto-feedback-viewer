@@ -251,7 +251,7 @@ public class BadWordController {
       return "Success";
     } catch (Exception e) {
       LOG.error("Error creating badword entry", e);
-      return "Error: " + e.getMessage();
+      return "Error: Unable to create badword entry";
     }
   }
 
