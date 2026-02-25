@@ -23,13 +23,13 @@ public class ProblemCacheService {
     LOGGER.info("Evicting caches at midnight");
   }
 
-  @Cacheable("processedProblems")
+  @Cacheable(value = "processedProblems", key = "'all'", sync = true)
   public List<Problem> getProcessedProblems() {
     LOGGER.info("Loading processed problems cache...");
     return problemRepository.findAllProcessedProblems();
   }
 
-  @Cacheable("distinctUrls")
+  @Cacheable(value = "distinctUrls", key = "'all'", sync = true)
   public List<String> getDistinctProcessedUrlsForCache() {
     LOGGER.info("Loading distinct URLs cache...");
     return problemRepository.findDistinctProcessedUrls();
