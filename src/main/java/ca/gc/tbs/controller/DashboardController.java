@@ -33,7 +33,6 @@ import org.springframework.data.mongodb.core.aggregation.GroupOperation;
 import org.springframework.data.mongodb.core.aggregation.MatchOperation;
 import org.springframework.data.mongodb.core.aggregation.SortOperation;
 import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.datatables.DataTablesInput;
 import org.springframework.data.mongodb.datatables.DataTablesOutput;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -644,9 +643,6 @@ public class DashboardController {
     @ResponseBody
     public DataTablesOutput<Problem> getDashboardData(
             @Valid DataTablesInput input, HttpServletRequest request) {
-        long startTime = System.currentTimeMillis();
-        long beforeUsedMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-        
         String pageLang = (String) request.getSession().getAttribute("lang");
         String department = request.getParameter("department");
         String startDate = request.getParameter("startDate");
@@ -658,47 +654,99 @@ public class DashboardController {
         String theme = request.getParameter("theme");
         Boolean error_keyword = "true".equals(request.getParameter("error_keyword"));
 
-        // Build base filter criteria (already includes date range check)
+        boolean hasRegexFilter = error_keyword
+                || (comments != null && !comments.trim().isEmpty() && !"null".equalsIgnoreCase(comments.trim()));
+
+        if (hasRegexFilter) {
+            return getDashboardDataViaAggregation(input, pageLang, startDate, endDate, theme, section,
+                    language, url, department, comments, error_keyword);
+        }
+
+        // No regex filters: use the in-memory cache for instant response
+        List<Problem> processedProblems = problemCacheService.getProcessedProblems();
+
+        // Group by (url, problemDate), then merge by url - done in memory from cache
+        List<Problem> merged = new ArrayList<>(
+            processedProblems.stream()
+                .collect(Collectors.groupingBy(
+                    p -> new AbstractMap.SimpleEntry<>(p.getUrl(), p.getProblemDate()),
+                    Collectors.collectingAndThen(Collectors.toList(), list -> {
+                        Problem p = new Problem();
+                        p.setUrl(list.get(0).getUrl());
+                        p.setProblemDate(list.get(0).getProblemDate());
+                        p.setUrlEntries(list.size());
+                        p.setInstitution(list.get(0).getInstitution());
+                        p.setTitle(list.get(0).getTitle());
+                        p.setLanguage(list.get(0).getLanguage());
+                        p.setSection(list.get(0).getSection());
+                        p.setTheme(list.get(0).getTheme());
+                        return p;
+                    })))
+                .values());
+
+        // Filter out future dates
+        LocalDate today = LocalDate.now();
+        merged = merged.stream()
+            .filter(p -> isValidDate(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE))
+            .filter(p -> !LocalDate.parse(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE).isAfter(today))
+            .collect(Collectors.toList());
+
+        // Apply non-regex filters in memory
+        merged = applyFilters(merged, department, startDate, endDate, language, url, section, theme);
+
+        // Merge entries for the same URL across dates, sort descending
+        merged = mergeProblems(merged);
+        merged.sort(Comparator.comparingInt(Problem::getUrlEntries).reversed());
+
+        totalComments = merged.stream().mapToInt(Problem::getUrlEntries).sum();
+        totalPages = merged.size();
+
+        List<Problem> page = applyPagination(merged, input.getStart(), input.getLength());
+
+        DataTablesOutput<Problem> output = new DataTablesOutput<>();
+        output.setData(page);
+        output.setDraw(input.getDraw());
+        output.setRecordsTotal(totalPages);
+        output.setRecordsFiltered(totalPages);
+        setInstitution(output, pageLang);
+        return output;
+    }
+
+    /**
+     * Handles dashboard data when a regex filter (comments search or error keywords) is active.
+     * Uses MongoDB aggregation since the cache doesn't store problemDetails text.
+     * Totals are computed with a separate $group + $count aggregation to avoid loading all results.
+     */
+    private DataTablesOutput<Problem> getDashboardDataViaAggregation(
+            DataTablesInput input, String pageLang,
+            String startDate, String endDate, String theme, String section,
+            String language, String url, String department,
+            String comments, boolean error_keyword) {
+
         Criteria criteria = buildFilterCriteria(startDate, endDate, theme, section, language, url, department);
 
         List<Criteria> regexCriteria = new ArrayList<>();
-
-        // Add error keyword filtering if enabled
         if (error_keyword) {
-            Set<String> keywordsToCheck = new HashSet<>();
-            keywordsToCheck.addAll(errorKeywordService.getEnglishKeywords());
-            keywordsToCheck.addAll(errorKeywordService.getFrenchKeywords());
-            keywordsToCheck.addAll(errorKeywordService.getBilingualKeywords());
-
-            if (!keywordsToCheck.isEmpty()) {
-                String combinedRegex = keywordsToCheck.stream()
-                        .map(Pattern::quote)
-                        .collect(Collectors.joining("|"));
+            Set<String> keywords = new HashSet<>();
+            keywords.addAll(errorKeywordService.getEnglishKeywords());
+            keywords.addAll(errorKeywordService.getFrenchKeywords());
+            keywords.addAll(errorKeywordService.getBilingualKeywords());
+            if (!keywords.isEmpty()) {
+                String combinedRegex = keywords.stream().map(Pattern::quote).collect(Collectors.joining("|"));
                 regexCriteria.add(Criteria.where("problemDetails").regex(combinedRegex, "i"));
             }
         }
-
-        // Add comment filtering if provided
         if (comments != null && !comments.trim().isEmpty() && !"null".equalsIgnoreCase(comments.trim())) {
-            String escapedComment = escapeSpecialRegexCharacters(comments.trim());
-            regexCriteria.add(Criteria.where("problemDetails").regex(escapedComment, "i"));
+            regexCriteria.add(Criteria.where("problemDetails").regex(escapeSpecialRegexCharacters(comments.trim()), "i"));
         }
-
-        // Combine all criteria
-        Criteria finalCriteria;
         if (!regexCriteria.isEmpty()) {
             List<Criteria> ands = new ArrayList<>();
             ands.add(criteria);
             ands.addAll(regexCriteria);
-            finalCriteria = new Criteria().andOperator(ands.toArray(new Criteria[0]));
-        } else {
-            finalCriteria = criteria;
+            criteria = new Criteria().andOperator(ands.toArray(new Criteria[0]));
         }
 
-        // OPTIMIZED: Use MongoDB aggregation pipeline instead of loading all data into cache
-        MatchOperation match = Aggregation.match(finalCriteria);
-        
-        // Group by URL to get counts per URL
+        MatchOperation match = Aggregation.match(criteria);
         GroupOperation groupByUrl = Aggregation.group("url")
                 .first("url").as("url")
                 .first("problemDate").as("problemDate")
@@ -708,45 +756,36 @@ public class DashboardController {
                 .first("section").as("section")
                 .first("theme").as("theme")
                 .count().as("urlEntries");
-        
-        SortOperation sortByEntriesDesc = Aggregation.sort(Sort.Direction.DESC, "urlEntries");
+        SortOperation sortDesc = Aggregation.sort(Sort.Direction.DESC, "urlEntries");
 
-        // Get paginated results
-        Aggregation paginatedAgg = Aggregation.newAggregation(
-                match,
-                groupByUrl,
-                sortByEntriesDesc,
-                Aggregation.skip((long) input.getStart()),
-                Aggregation.limit(input.getLength())
-        );
+        // Paginated data query
+        List<Problem> page = mongoTemplate.aggregate(
+                Aggregation.newAggregation(match, groupByUrl, sortDesc,
+                        Aggregation.skip((long) input.getStart()),
+                        Aggregation.limit(input.getLength())),
+                "problem", Problem.class).getMappedResults();
 
-        AggregationResults<Problem> results = mongoTemplate.aggregate(paginatedAgg, "problem", Problem.class);
-        List<Problem> groupedProblems = results.getMappedResults();
+        // Totals via $group + $count — avoids loading all results into memory
+        Document totalsDoc = mongoTemplate.aggregate(
+                Aggregation.newAggregation(
+                        match, groupByUrl,
+                        Aggregation.group().count().as("pages").sum("urlEntries").as("comments")),
+                "problem", Document.class).getUniqueMappedResult();
 
-        // Calculate totals (only for the filtered set)
-        Aggregation totalAgg = Aggregation.newAggregation(match, groupByUrl);
-        List<Problem> allGroupedProblems = mongoTemplate.aggregate(totalAgg, "problem", Problem.class).getMappedResults();
-        
-        totalPages = allGroupedProblems.size();
-        totalComments = allGroupedProblems.stream().mapToInt(Problem::getUrlEntries).sum();
+        if (totalsDoc != null) {
+            totalPages = totalsDoc.getInteger("pages", 0);
+            totalComments = totalsDoc.getInteger("comments", 0);
+        } else {
+            totalPages = 0;
+            totalComments = 0;
+        }
 
-        // Create DataTablesOutput
         DataTablesOutput<Problem> output = new DataTablesOutput<>();
-        output.setData(groupedProblems);
+        output.setData(page);
         output.setDraw(input.getDraw());
         output.setRecordsTotal(totalPages);
         output.setRecordsFiltered(totalPages);
-
-        // Adjust institution names based on language
         setInstitution(output, pageLang);
-        
-        long afterUsedMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-        long actualMemUsed = afterUsedMem - beforeUsedMem;
-        long elapsedTime = System.currentTimeMillis() - startTime;
-        
-        LOGGER.info("OPTIMIZED getDashboardData() - Time: {}ms, Memory: {} bytes, Results: {}/{}",
-                elapsedTime, actualMemUsed, groupedProblems.size(), totalPages);
-
         return output;
     }
 
@@ -802,19 +841,6 @@ public class DashboardController {
         return input.replaceAll("([\\\\.^$|()\\[\\]{}*+?])", "\\\\$1");
     }
 
-
-    private Problem createProblemFromResult(Map result) {
-        Problem problem = new Problem();
-        problem.setUrl((String) result.get("url"));
-        problem.setProblemDate((String) result.get("day"));
-        problem.setUrlEntries((Integer) result.get("count"));
-        problem.setTitle((String) result.get("title"));
-        problem.setLanguage((String) result.get("language"));
-        problem.setInstitution((String) result.get("institution"));
-        problem.setTheme((String) result.get("theme"));
-        problem.setSection((String) result.get("section"));
-        return problem;
-    }
 
     private List<Problem> applyFilters(
             List<Problem> problems,
