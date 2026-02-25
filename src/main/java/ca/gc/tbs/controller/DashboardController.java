@@ -65,6 +65,8 @@ public class DashboardController {
     private int totalPages = 0;
 
     private List<Problem> problems;
+    // Pre-merge list (grouped by url+date) used by the chart endpoint
+    private List<Problem> problemsByDate;
 
     @Autowired
     private UserService userService;
@@ -556,14 +558,14 @@ public class DashboardController {
             return dailyCommentsList;
         }
 
-        // Non-regex: use in-memory problems list populated by getDashboardData
-        if (problems == null) {
+        // Non-regex: use pre-merge (url+date) list so each date gets its own bar
+        if (problemsByDate == null) {
             return new ArrayList<>();
         }
 
         Map<String, Integer> dateToCommentCountMap = new HashMap<>();
-        problems.sort(Comparator.comparing(Problem::getProblemDate));
-        for (Problem problem : problems) {
+        problemsByDate.sort(Comparator.comparing(Problem::getProblemDate));
+        for (Problem problem : problemsByDate) {
             if (problem != null && problem.getProblemDate() != null) {
                 dateToCommentCountMap.merge(problem.getProblemDate(), problem.getUrlEntries(), Integer::sum);
             }
@@ -630,6 +632,7 @@ public class DashboardController {
             .collect(Collectors.toList());
 
         merged = applyFilters(merged, department, startDate, endDate, language, url, section, theme);
+        problemsByDate = merged; // snapshot before merging across dates — used by chart endpoint
         merged = mergeProblems(merged);
         merged.sort(Comparator.comparingInt(Problem::getUrlEntries).reversed());
         return merged;
