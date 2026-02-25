@@ -20,7 +20,7 @@
         <!-- Security overrides for Dependabot alerts -->
         <assertj.version>3.27.3</assertj.version>
         <commons-lang3.version>3.17.0</commons-lang3.version>
-        <logback.version>1.5.16</logback.version>
+        <logback.version>1.5.18</logback.version>
     </properties>
 
     <dependencies>
