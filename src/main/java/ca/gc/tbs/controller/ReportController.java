@@ -7,8 +7,6 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.Scanner;
 
-import javax.swing.text.View;
-
 import org.apache.commons.csv.CSVFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,7 +40,7 @@ public class ReportController {
   public ReportController() {}
 
   @GetMapping("/reports")
-  public View generateReports() throws Exception {
+  public RedirectView generateReports() throws Exception {
     new File(Paths.get(pythonPath + "/" + INPUT_FILENAME).toString()).delete();
     BufferedWriter writer =
         Files.newBufferedWriter(Paths.get(pythonScriptPath + "/" + INPUT_FILENAME));
