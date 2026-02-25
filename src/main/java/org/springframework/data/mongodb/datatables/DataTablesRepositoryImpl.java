@@ -4,10 +4,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
+import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.repository.query.MongoEntityInformation;
@@ -19,7 +22,8 @@ import org.springframework.data.mongodb.repository.support.SimpleMongoRepository
  *
  * Designed for Azure CosmosDB compatibility:
  * - Uses $regex instead of $text for search (CosmosDB doesn't support text indexes)
- * - Uses simple count() queries instead of complex aggregations
+ * - Uses estimatedDocumentCount() for unfiltered totals (fast, metadata-based)
+ * - Uses $match + $count aggregation for filtered counts (CosmosDB compatible)
  * - Uses skip/limit for pagination
  */
 public class DataTablesRepositoryImpl<T, ID>
@@ -45,7 +49,6 @@ public class DataTablesRepositoryImpl<T, ID>
 
   @Override
   public DataTablesOutput<T> findAll(DataTablesInput input, Criteria additionalCriteria) {
-    // Delegate to the version with no cached count
     return findAll(input, additionalCriteria, -1);
   }
 
@@ -75,25 +78,18 @@ public class DataTablesRepositoryImpl<T, ID>
       String collectionName = entityInformation.getCollectionName();
       Class<T> entityClass = entityInformation.getJavaType();
 
-      // Use cached count if provided - SKIP expensive count queries on CosmosDB
-      // If no cached count available, use a large estimate to enable pagination
       long totalCount;
       if (cachedTotalCount >= 0) {
         totalCount = cachedTotalCount;
         LOG.debug("PERF: Using cached total count: {}", totalCount);
       } else {
-        // Use a large estimate instead of expensive count query
-        // This allows pagination to work without exact counts
-        totalCount = 1000000L; // Large estimate
-        LOG.debug("PERF: Using estimated total count: {}", totalCount);
+        totalCount = countDocuments(finalCriteria, collectionName);
+        LOG.debug("PERF: Count took {}ms (result: {})", System.currentTimeMillis() - methodStart, totalCount);
       }
       output.setRecordsTotal(totalCount);
-
-      // For filtered count, always use the same as total to avoid expensive queries
-      // DataTables will still paginate correctly
       output.setRecordsFiltered(totalCount);
 
-      // Apply sorting - CosmosDB compatible
+      // Apply sorting
       Sort sort = buildSort(input);
       if (sort.isSorted()) {
         query.with(sort);
@@ -104,7 +100,7 @@ public class DataTablesRepositoryImpl<T, ID>
         query.skip(input.getStart()).limit(input.getLength());
       }
 
-      // Execute query
+      // Execute data query
       long dataQueryStart = System.currentTimeMillis();
       List<T> data = mongoOperations.find(query, entityClass, collectionName);
       output.setData(data);
@@ -118,6 +114,29 @@ public class DataTablesRepositoryImpl<T, ID>
 
     LOG.debug("PERF: Total findAll took {}ms", System.currentTimeMillis() - methodStart);
     return output;
+  }
+
+  /**
+   * Count documents matching the given criteria.
+   * - Empty/null criteria: uses estimatedDocumentCount() - reads collection metadata, no scan.
+   * - With criteria: uses $match + $count aggregation pipeline - CosmosDB compatible.
+   *   (MongoTemplate.count() uses countDocuments() which runs $group+$sum and times out on CosmosDB)
+   */
+  private long countDocuments(Criteria criteria, String collectionName) {
+    boolean isEmpty = criteria == null || criteria.equals(new Criteria());
+    if (isEmpty) {
+      // estimatedDocumentCount reads collection stats - instant, no query needed
+      return mongoOperations.getCollection(collectionName).estimatedDocumentCount();
+    }
+    // $match + $count aggregation is CosmosDB-compatible and avoids the $group+$sum timeout
+    Aggregation countAgg = Aggregation.newAggregation(
+        Aggregation.match(criteria),
+        Aggregation.count().as("n")
+    );
+    AggregationResults<Document> results =
+        mongoOperations.aggregate(countAgg, collectionName, Document.class);
+    Document countDoc = results.getUniqueMappedResult();
+    return countDoc != null ? ((Number) countDoc.get("n")).longValue() : 0L;
   }
 
   /**

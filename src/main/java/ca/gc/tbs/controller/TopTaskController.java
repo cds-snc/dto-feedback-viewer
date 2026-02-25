@@ -581,9 +581,21 @@ public class TopTaskController {
 
     List<Map> distinctTaskCounts = topTaskRepository.findDistinctTaskCountsWithFilters(criteria);
     totalDistinctTasks = distinctTaskCounts.size();
-    
-    // Use -1 to skip slow count queries on CosmosDB - repository will use estimate
-    DataTablesOutput<TopTaskSurvey> results = topTaskRepository.findAll(input, criteria, -1);
+
+    // Use estimatedDocumentCount (metadata-based, instant) when no filters are applied,
+    // to avoid an expensive count query against CosmosDB.
+    boolean isFiltered = (startDateVal != null && endDateVal != null)
+        || (language != null && !language.isEmpty())
+        || (departmentFilterVal != null && !departmentFilterVal.isEmpty())
+        || (themeFilterVal != null && !themeFilterVal.isEmpty())
+        || (groupFilterVal != null && !groupFilterVal.isEmpty())
+        || (taskFilterVals != null && taskFilterVals.length > 0)
+        || (taskCompletionFilterVal != null && !taskCompletionFilterVal.isEmpty())
+        || (comments != null && !comments.trim().isEmpty() && !"null".equalsIgnoreCase(comments.trim()))
+        || includeCommentsOnly;
+    long cachedCount = isFiltered ? -1
+        : mongoTemplate.getCollection("toptasksurvey").estimatedDocumentCount();
+    DataTablesOutput<TopTaskSurvey> results = topTaskRepository.findAll(input, criteria, cachedCount);
 
     totalTaskCount = (int) results.getRecordsFiltered();
     return results;

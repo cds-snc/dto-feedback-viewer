@@ -1053,9 +1053,7 @@ public class ProblemController {
         }
         DataTablesOutput<Problem> results;
 
-        // Use -1 to skip slow count queries on CosmosDB - repository will use estimate
         if (error_keyword) {
-            // Build regex pattern from all keywords
             Set<String> keywordsToCheck = new HashSet<>();
             keywordsToCheck.addAll(errorKeywordService.getEnglishKeywords());
             keywordsToCheck.addAll(errorKeywordService.getFrenchKeywords());
@@ -1063,13 +1061,22 @@ public class ProblemController {
 
             if (!keywordsToCheck.isEmpty()) {
                 criteria.and("problemDetails").regex(String.join("|", keywordsToCheck), "i");
-                results = problemRepository.findAll(input, criteria, -1);
-            } else {
-                results = problemRepository.findAll(input, criteria, -1);
             }
-        } else {
-            results = problemRepository.findAll(input, criteria, -1);
         }
+
+        // Use the cached total count when no filters narrow the result set,
+        // to avoid an expensive count query against CosmosDB.
+        boolean isFiltered = (startDate != null && endDate != null)
+                || (language != null && !language.isEmpty())
+                || (department != null && !department.isEmpty())
+                || (theme != null && !theme.isEmpty())
+                || (section != null && !section.isEmpty())
+                || (url != null && !url.isEmpty())
+                || (comments != null && !comments.isEmpty())
+                || (titles != null && titles.length > 0)
+                || error_keyword;
+        long cachedCount = isFiltered ? -1 : problemCacheService.getProcessedProblems().size();
+        results = problemRepository.findAll(input, criteria, cachedCount);
         
         // Update institution names in the results based on the language
         setInstitution(results, pageLang);
