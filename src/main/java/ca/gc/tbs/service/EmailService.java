@@ -5,7 +5,6 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,6 +13,13 @@ import uk.gov.service.notify.NotificationClient;
 
 @Service
 public class EmailService {
+
+  private record UserActivationPersonalisation(String email, String loginURL) {
+    Map<String, String> toMap() {
+      return Map.of("email", email(), "loginURL", loginURL());
+    }
+  }
+
 
   private final String userActivationRequestKey;
 
@@ -63,9 +69,7 @@ public class EmailService {
   }
 
   public void sendUserActivationRequestEmail(String email) {
-    Map<String, String> personalisation = new HashMap<>();
-    personalisation.put("email", email);
-    personalisation.put("loginURL", loginURL);
+    Map<String, String> personalisation = new UserActivationPersonalisation(email, loginURL).toMap();
     List<User> admins = this.userService.findUserByRole(UserService.ADMIN_ROLE);
     for (User user : admins) {
       try {
