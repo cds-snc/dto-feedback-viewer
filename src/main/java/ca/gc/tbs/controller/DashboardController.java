@@ -585,60 +585,54 @@ public class DashboardController {
     @Scheduled(cron = "0 1 0 * * *")
     @EventListener(ApplicationReadyEvent.class)
     public void init() {
-        LOGGER.info("DashboardController: Starting initial data fetch and cache population.");
-        
-        // Preload dashboard totals for fast initial page load
+        LOGGER.info("DashboardController: pre-computing merged problems for dashboard...");
         try {
-            LOGGER.info("DashboardController: Calculating initial totalComments and totalPages...");
-            List<Problem> processedProblems = problemCacheService.getProcessedProblems();
-            problemDateService.getProblemDates();
-            
-            // Group by URL and problemDate to get merged problems
-            List<Problem> mergedProblems = new ArrayList<>(
-                processedProblems.stream()
-                    .collect(
-                        Collectors.groupingBy(
-                            p -> new AbstractMap.SimpleEntry<>(p.getUrl(), p.getProblemDate()),
-                            Collectors.collectingAndThen(
-                                Collectors.toList(),
-                                list -> {
-                                    Problem problem = new Problem();
-                                    problem.setUrl(list.get(0).getUrl());
-                                    problem.setProblemDate(list.get(0).getProblemDate());
-                                    problem.setUrlEntries(list.size());
-                                    problem.setInstitution(list.get(0).getInstitution());
-                                    problem.setTitle(list.get(0).getTitle());
-                                    problem.setLanguage(list.get(0).getLanguage());
-                                    problem.setSection(list.get(0).getSection());
-                                    problem.setTheme(list.get(0).getTheme());
-                                    return problem;
-                                })))
-                    .values());
-            
-            // Filter out future dates
-            LocalDate currentDate = LocalDate.now();
-            mergedProblems = mergedProblems.stream()
-                .filter(p -> isValidDate(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE))
-                .filter(p -> {
-                    LocalDate problemDate = LocalDate.parse(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE);
-                    return !problemDate.isAfter(currentDate);
-                })
-                .collect(Collectors.toList());
-            
-            // Merge problems with same URL (across different dates)
-            mergedProblems = mergeProblems(mergedProblems);
-            
-            // Calculate totals
-            totalComments = mergedProblems.stream().mapToInt(Problem::getUrlEntries).sum();
-            totalPages = mergedProblems.size();
-            
-            LOGGER.info("DashboardController: Preloaded totals - {} comments across {} pages", 
-                totalComments, totalPages);
+            problems = buildMergedProblems(null, null, null, null, null, null, null, null);
+            totalComments = problems.stream().mapToInt(Problem::getUrlEntries).sum();
+            totalPages = problems.size();
+            LOGGER.info("DashboardController: ready - {} comments across {} pages", totalComments, totalPages);
         } catch (Exception e) {
-            LOGGER.error("DashboardController: Error calculating initial totals", e);
+            LOGGER.error("DashboardController: error during init", e);
         }
-        
-        LOGGER.info("DashboardController: Initial data fetch and cache population complete.");
+    }
+
+    /**
+     * Builds the merged+filtered problem list from the in-memory cache.
+     * Groups raw records by (url, problemDate), merges across dates by url,
+     * applies optional filters, and sorts by urlEntries descending.
+     */
+    private List<Problem> buildMergedProblems(String department, String startDate, String endDate,
+            String language, String url, String section, String theme, LocalDate maxDate) {
+        List<Problem> processedProblems = problemCacheService.getProcessedProblems();
+
+        List<Problem> merged = new ArrayList<>(
+            processedProblems.stream()
+                .collect(Collectors.groupingBy(
+                    p -> new AbstractMap.SimpleEntry<>(p.getUrl(), p.getProblemDate()),
+                    Collectors.collectingAndThen(Collectors.toList(), list -> {
+                        Problem p = new Problem();
+                        p.setUrl(list.get(0).getUrl());
+                        p.setProblemDate(list.get(0).getProblemDate());
+                        p.setUrlEntries(list.size());
+                        p.setInstitution(list.get(0).getInstitution());
+                        p.setTitle(list.get(0).getTitle());
+                        p.setLanguage(list.get(0).getLanguage());
+                        p.setSection(list.get(0).getSection());
+                        p.setTheme(list.get(0).getTheme());
+                        return p;
+                    })))
+                .values());
+
+        LocalDate cutoff = maxDate != null ? maxDate : LocalDate.now();
+        merged = merged.stream()
+            .filter(p -> isValidDate(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE))
+            .filter(p -> !LocalDate.parse(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE).isAfter(cutoff))
+            .collect(Collectors.toList());
+
+        merged = applyFilters(merged, department, startDate, endDate, language, url, section, theme);
+        merged = mergeProblems(merged);
+        merged.sort(Comparator.comparingInt(Problem::getUrlEntries).reversed());
+        return merged;
     }
 
     @GetMapping(value = "/dashboardData")
@@ -665,40 +659,7 @@ public class DashboardController {
         }
 
         // No regex filters: use the in-memory cache for instant response
-        List<Problem> processedProblems = problemCacheService.getProcessedProblems();
-
-        // Group by (url, problemDate), then merge by url - done in memory from cache
-        List<Problem> merged = new ArrayList<>(
-            processedProblems.stream()
-                .collect(Collectors.groupingBy(
-                    p -> new AbstractMap.SimpleEntry<>(p.getUrl(), p.getProblemDate()),
-                    Collectors.collectingAndThen(Collectors.toList(), list -> {
-                        Problem p = new Problem();
-                        p.setUrl(list.get(0).getUrl());
-                        p.setProblemDate(list.get(0).getProblemDate());
-                        p.setUrlEntries(list.size());
-                        p.setInstitution(list.get(0).getInstitution());
-                        p.setTitle(list.get(0).getTitle());
-                        p.setLanguage(list.get(0).getLanguage());
-                        p.setSection(list.get(0).getSection());
-                        p.setTheme(list.get(0).getTheme());
-                        return p;
-                    })))
-                .values());
-
-        // Filter out future dates
-        LocalDate today = LocalDate.now();
-        merged = merged.stream()
-            .filter(p -> isValidDate(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE))
-            .filter(p -> !LocalDate.parse(p.getProblemDate(), DateTimeFormatter.ISO_LOCAL_DATE).isAfter(today))
-            .collect(Collectors.toList());
-
-        // Apply non-regex filters in memory
-        merged = applyFilters(merged, department, startDate, endDate, language, url, section, theme);
-
-        // Merge entries for the same URL across dates, sort descending
-        merged = mergeProblems(merged);
-        merged.sort(Comparator.comparingInt(Problem::getUrlEntries).reversed());
+        List<Problem> merged = buildMergedProblems(department, startDate, endDate, language, url, section, theme, null);
 
         totalComments = merged.stream().mapToInt(Problem::getUrlEntries).sum();
         totalPages = merged.size();
