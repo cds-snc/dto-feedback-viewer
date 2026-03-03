@@ -7,8 +7,6 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.Scanner;
 
-import javax.swing.text.View;
-
 import org.apache.commons.csv.CSVFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +15,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.servlet.view.RedirectView;
 
 import ca.gc.tbs.domain.Problem;
 import ca.gc.tbs.repository.ProblemRepository;
@@ -42,7 +39,7 @@ public class ReportController {
   public ReportController() {}
 
   @GetMapping("/reports")
-  public View generateReports() throws Exception {
+  public String generateReports() throws Exception {
     new File(Paths.get(pythonPath + "/" + INPUT_FILENAME).toString()).delete();
     BufferedWriter writer =
         Files.newBufferedWriter(Paths.get(pythonScriptPath + "/" + INPUT_FILENAME));
@@ -84,7 +81,7 @@ public class ReportController {
     // call python
     this.executePython();
 
-    return new RedirectView("/reports/view");
+    return "redirect:/reports/view";
   }
 
   @GetMapping("/reports/view")
