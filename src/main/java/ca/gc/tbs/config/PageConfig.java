@@ -5,7 +5,6 @@
  */
 package ca.gc.tbs.config;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
@@ -14,9 +13,6 @@ import org.springframework.web.servlet.resource.PathResourceResolver;
 
 @Configuration
 public class PageConfig implements WebMvcConfigurer {
-
-  @Value("${pagesuccess.pythonScriptPath}")
-  private String pythonScriptPath;
 
   @Override
   public void addViewControllers(ViewControllerRegistry registry) {
@@ -39,10 +35,5 @@ public class PageConfig implements WebMvcConfigurer {
     registry
         .addResourceHandler("/templates/**") // « /templates/style.css
         .addResourceLocations("classpath:/templates/static/");
-
-    // File located on disk
-    registry
-        .addResourceHandler("/python/**")
-        .addResourceLocations("file://" + this.pythonScriptPath);
   }
 }
