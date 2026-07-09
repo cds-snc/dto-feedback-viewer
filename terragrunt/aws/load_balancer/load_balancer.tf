@@ -1,4 +1,5 @@
 resource "aws_lb" "feedback_viewer" {
+  provider           = aws.core_services
   name               = "${var.product_name}-lb"
   internal           = false #tfsec:ignore:AWS005
   load_balancer_type = "application"
@@ -20,6 +21,7 @@ resource "aws_lb" "feedback_viewer" {
 }
 
 resource "aws_lb_listener" "feedback_viewer_listener" {
+  provider   = aws.core_services
   depends_on = [
     aws_acm_certificate.feedback_viewer,
     aws_route53_record.feedback_viewer_certificate_validation,
@@ -43,6 +45,7 @@ resource "aws_lb_listener" "feedback_viewer_listener" {
 }
 
 resource "aws_lb_target_group" "feedback_viewer" {
+  provider             = aws.core_services
   name                 = var.product_name
   port                 = 3001
   protocol             = "HTTP"

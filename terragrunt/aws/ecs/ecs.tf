@@ -16,7 +16,7 @@ locals {
 }
 
 module "feedback_viewer" {
-  source = "github.com/cds-snc/terraform-modules//ecs?ref=v10.9.1"
+  source = "github.com/cds-snc/terraform-modules//ecs?ref=v11.4.1"
 
   # Cluster and service
   cluster_name = "${var.product_name}-cluster"
@@ -114,11 +114,13 @@ module "feedback_viewer" {
 }
 
 resource "aws_cloudwatch_log_group" "feedback-viewer_group" {
+  provider          = aws.core_services
   name              = "/aws/ecs/${var.product_name}-cluster"
   retention_in_days = 30
 }
 
 resource "aws_cloudwatch_log_stream" "feedback-viewer_stream" {
+  provider       = aws.core_services
   name           = "${var.product_name}-log-stream"
   log_group_name = aws_cloudwatch_log_group.feedback-viewer_group.name
 }

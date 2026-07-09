@@ -30,6 +30,7 @@ data "aws_iam_policy_document" "feedback_viewer_ssm_policy" {
 }
 
 resource "aws_iam_policy" "feedback_viewer_ssm_policy" {
+  provider    = aws.core_services
   name        = "${var.product_name}-ssm-policy"
   description = "Policy for ${var.product_name} ${var.env} to access SSM parameters"
   policy      = data.aws_iam_policy_document.feedback_viewer_ssm_policy.json
@@ -41,16 +42,19 @@ resource "aws_iam_policy" "feedback_viewer_ssm_policy" {
 }
 
 resource "aws_iam_role" "feedback_viewer_ecs_role" {
+  provider           = aws.core_services
   name               = "${var.product_name}-ecs-role"
   assume_role_policy = data.aws_iam_policy_document.feedback_viewer_ecs_policy.json
 }
 
 resource "aws_iam_role_policy_attachment" "feedback_viewer_ecs_policy" {
+  provider   = aws.core_services
   role       = aws_iam_role.feedback_viewer_ecs_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 resource "aws_iam_role_policy_attachment" "feedback_viewer_ecs_role_ssm_policy" {
+  provider   = aws.core_services
   policy_arn = aws_iam_policy.feedback_viewer_ssm_policy.arn
   role       = aws_iam_role.feedback_viewer_ecs_role.name
 }
