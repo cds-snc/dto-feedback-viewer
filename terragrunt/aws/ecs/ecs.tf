@@ -16,7 +16,7 @@ locals {
 }
 
 module "feedback_viewer" {
-  source = "github.com/cds-snc/terraform-modules//ecs?ref=v11.4.1"
+  source = "github.com/cds-snc/terraform-modules//ecs?ref=v11.4.3"
 
   # Cluster and service
   cluster_name = "${var.product_name}-cluster"
