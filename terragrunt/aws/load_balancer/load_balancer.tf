@@ -21,7 +21,7 @@ resource "aws_lb" "feedback_viewer" {
 }
 
 resource "aws_lb_listener" "feedback_viewer_listener" {
-  provider   = aws.core_services
+  provider = aws.core_services
   depends_on = [
     aws_acm_certificate.feedback_viewer,
     aws_route53_record.feedback_viewer_certificate_validation,
