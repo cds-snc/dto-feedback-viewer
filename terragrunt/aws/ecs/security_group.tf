@@ -3,6 +3,7 @@
 ###
 
 resource "aws_security_group" "ecs_tasks" {
+  provider    = aws.core_services
   name        = "feedback-viewer-security-group"
   description = "Allow inbound and outbound traffic for Feedback Viewer"
   vpc_id      = var.vpc_id
