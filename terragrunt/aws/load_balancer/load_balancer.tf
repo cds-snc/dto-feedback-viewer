@@ -13,11 +13,6 @@ resource "aws_lb" "feedback_viewer" {
   ]
 
   subnets = var.vpc_public_subnet_ids
-
-  tags = merge(var.default_tags, {
-    CostCentre   = var.billing_code
-    ForceRefresh = "2025-08-14"
-  })
 }
 
 resource "aws_lb_listener" "feedback_viewer_listener" {
@@ -37,11 +32,6 @@ resource "aws_lb_listener" "feedback_viewer_listener" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.feedback_viewer.arn
   }
-
-  tags = merge(var.default_tags, {
-    CostCentre   = var.billing_code
-    ForceRefresh = "2025-08-14"
-  })
 }
 
 resource "aws_lb_target_group" "feedback_viewer" {
@@ -62,9 +52,4 @@ resource "aws_lb_target_group" "feedback_viewer" {
     healthy_threshold   = 2
     unhealthy_threshold = 2
   }
-
-  tags = merge(var.default_tags, {
-    CostCentre   = var.billing_code
-    ForceRefresh = "2025-08-14"
-  })
 }
