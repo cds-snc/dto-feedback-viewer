@@ -95,7 +95,7 @@ module "feedback_viewer" {
   task_role_arn      = var.iam_role_arn
 
   # Scaling
-  enable_autoscaling = true
+  enable_autoscaling = false
   desired_count      = var.desired_count
 
   # Networking
