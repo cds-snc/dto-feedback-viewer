@@ -95,7 +95,7 @@ module "feedback_viewer" {
   task_role_arn      = var.iam_role_arn
 
   # Scaling
-  enable_autoscaling = true
+  enable_autoscaling = false
   desired_count      = var.desired_count
 
   # Networking
@@ -103,8 +103,8 @@ module "feedback_viewer" {
   security_group_ids  = [aws_security_group.ecs_tasks.id]
   subnet_ids          = var.private_subnet_ids
 
-  # Forward logs to Sentinel
-  sentinel_forwarder           = true
+  # disable Forwarding logs to Sentinel as repo is not in use currently.
+  # sentinel_forwarder           = true
   sentinel_forwarder_layer_arn = "arn:aws:lambda:ca-central-1:283582579564:layer:aws-sentinel-connector-layer:238"
 
   billing_tag_value = var.billing_code
