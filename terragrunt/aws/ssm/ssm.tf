@@ -12,3 +12,15 @@ resource "aws_ssm_parameter" "jwt_secret_key" {
     Terraform  = true
   }
 }
+
+resource "aws_ssm_parameter" "gc_ip_filter_whitelist" {
+  provider = aws.core_services
+  name     = "/feedback-viewer/staging/gc_ip_filter_whitelist"
+  type     = "SecureString"
+  value    = var.gc_ip_filter_whitelist
+
+  tags = {
+    CostCentre = var.billing_code
+    Terraform  = true
+  }
+}

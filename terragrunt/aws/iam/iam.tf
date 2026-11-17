@@ -24,7 +24,8 @@ data "aws_iam_policy_document" "feedback_viewer_ssm_policy" {
     resources = [
       var.docdb_username_arn,
       var.docdb_password_arn,
-      var.jwt_secret_key_arn
+      var.jwt_secret_key_arn,
+      var.gc_ip_filter_whitelist_arn
     ]
   }
 }

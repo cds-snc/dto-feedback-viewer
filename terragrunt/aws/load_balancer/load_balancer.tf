@@ -47,7 +47,7 @@ resource "aws_lb_target_group" "feedback_viewer" {
   health_check {
     enabled             = true
     interval            = 60
-    path                = "/health"
+    path                = "/actuator/health"
     timeout             = 30
     healthy_threshold   = 2
     unhealthy_threshold = 2

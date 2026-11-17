@@ -4,3 +4,9 @@ variable "jwt_secret_key" {
   sensitive   = true
   type        = string
 }
+
+variable "gc_ip_filter_whitelist" {
+  description = "Comma-separated IPs the GC IP filter lets through"
+  sensitive   = true
+  type        = string
+}
