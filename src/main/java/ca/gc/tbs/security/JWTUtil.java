@@ -21,11 +21,9 @@ public class JWTUtil {
 
   private SecretKey getSigningKey() {
     byte[] keyBytes = SECRET_KEY.getBytes(StandardCharsets.UTF_8);
-    // Ensure key is at least 256 bits (32 bytes) for HS256
     if (keyBytes.length < 32) {
-      byte[] paddedKey = new byte[32];
-      System.arraycopy(keyBytes, 0, paddedKey, 0, keyBytes.length);
-      return Keys.hmacShaKeyFor(paddedKey);
+      throw new IllegalStateException(
+          "jwt.secret.key must be at least 32 characters; got " + keyBytes.length);
     }
     return Keys.hmacShaKeyFor(keyBytes);
   }
@@ -64,9 +62,7 @@ public class JWTUtil {
   public String generateToken(UserDetails userDetails) {
     Map<String, Object> claims = new HashMap<>();
     List<String> authorities =
-        userDetails.getAuthorities().stream()
-            .map(GrantedAuthority::getAuthority)
-            .toList();
+        userDetails.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList();
     claims.put("authorities", authorities);
     return createToken(claims, userDetails.getUsername());
   }

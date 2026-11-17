@@ -2,27 +2,28 @@ package ca.gc.tbs.controller;
 
 import ca.gc.tbs.domain.User;
 import ca.gc.tbs.service.UserService;
-import java.util.List;
 import jakarta.servlet.http.HttpServletRequest;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.ModelAndView;
-import org.springframework.web.servlet.View;
-import org.springframework.web.servlet.mvc.support.RedirectAttributes;
-import org.springframework.web.servlet.view.RedirectView;
+import org.springframework.web.util.HtmlUtils;
 
 @Controller
+@PreAuthorize("hasAuthority('ADMIN')")
 public class UserController {
 
   private static final Logger LOG = LoggerFactory.getLogger(UserController.class);
 
   @Autowired private UserService service;
 
-  @GetMapping(value = "/u/update")
+  @PostMapping(value = "/u/update")
   public @ResponseBody String updateUser(HttpServletRequest request) {
     try {
       this.service.enable(request.getParameter("id"));
@@ -33,7 +34,7 @@ public class UserController {
     }
   }
 
-  @GetMapping(value = "/u/delete")
+  @PostMapping(value = "/u/delete")
   public @ResponseBody String deleteUser(HttpServletRequest request) {
     try {
       this.service.deleteUserById(request.getParameter("id"));
@@ -41,20 +42,6 @@ public class UserController {
     } catch (Exception e) {
       LOG.error("Error deleting user", e);
       return "Error: an internal error occurred";
-    }
-  }
-
-  /* TODO check for prod environment and disable */
-  @GetMapping(value = "/enableAdmin")
-  public View enableAdmin(HttpServletRequest request, RedirectAttributes atts) {
-    try {
-      this.service.enableAdmin(request.getParameter("email"));
-      atts.addFlashAttribute("successMessage", "User has been enabled and admin");
-      return new RedirectView("/success");
-    } catch (Exception e) {
-      LOG.error("Failed to enable admin", e);
-      atts.addFlashAttribute("errorMessage", "Failed to enable admin. Please try again.");
-      return new RedirectView("/error");
     }
   }
 
@@ -70,23 +57,25 @@ public class UserController {
         String institution = user.getInstitution();
         String dateCreated = user.getDateCreated();
         boolean enabled = user.isEnabled();
-        List<String> roles = user.getRoles().stream()
-            .map(ca.gc.tbs.domain.Role::getRole)
-            .toList();
+        List<String> roles =
+            user.getRoles() != null
+                ? user.getRoles().stream().map(ca.gc.tbs.domain.Role::getRole).toList()
+                : List.of();
 
-        String status = isEn
-            ? (enabled ? "Enabled" : "Awaiting approval")
-            : (enabled ? "Activé" : "En attente d'approbation");
+        String status =
+            isEn
+                ? (enabled ? "Enabled" : "Awaiting approval")
+                : (enabled ? "Activé" : "En attente d'approbation");
 
-        String toggleLabel = isEn
-            ? (enabled ? "Disable" : "Enable")
-            : (enabled ? "Désactiver" : "Activer");
+        String toggleLabel =
+            isEn ? (enabled ? "Disable" : "Enable") : (enabled ? "Désactiver" : "Activer");
 
         String toggleClass = enabled ? "disableBtn" : "enableBtn";
         String toggleIdPrefix = enabled ? "disable" : "enable";
         String deleteLabel = isEn ? "Delete" : "Supprimer";
 
-        builder.append("""
+        builder.append(
+            """
             <tr>
               <td>%s</td>
               <td>%s</td>
@@ -99,10 +88,19 @@ public class UserController {
                   <button id='delete%s' class='btn btn-xs deleteBtn'>%s</button>
                 </div>
               </td>
-            </tr>""".formatted(
-            email, institution, roles, dateCreated, status,
-            toggleIdPrefix, id, toggleClass, toggleLabel,
-            id, deleteLabel));
+            </tr>"""
+                .formatted(
+                    HtmlUtils.htmlEscape(email != null ? email : ""),
+                    HtmlUtils.htmlEscape(institution != null ? institution : ""),
+                    HtmlUtils.htmlEscape(roles.toString()),
+                    dateCreated,
+                    status,
+                    toggleIdPrefix,
+                    id,
+                    toggleClass,
+                    toggleLabel,
+                    id,
+                    deleteLabel));
       }
       return builder.toString();
     } catch (Exception e) {

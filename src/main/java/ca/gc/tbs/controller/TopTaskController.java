@@ -1,7 +1,19 @@
 package ca.gc.tbs.controller;
 
+import ca.gc.tbs.domain.TopTaskSurvey;
+import ca.gc.tbs.domain.User;
+import ca.gc.tbs.repository.TopTaskRepository;
+import ca.gc.tbs.security.JWTUtil;
+import ca.gc.tbs.service.ProblemDateService;
+import ca.gc.tbs.service.UserService;
+import ca.gc.tbs.util.RegexUtils;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 import java.io.IOException;
-import java.io.Writer;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -12,18 +24,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
-import jakarta.servlet.ServletOutputStream;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import jakarta.validation.Valid;
-
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.xssf.streaming.SXSSFSheet;
-import org.apache.poi.xssf.streaming.SXSSFWorkbook;
+import java.util.stream.Stream;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,13 +46,6 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.ModelAndView;
-
-import ca.gc.tbs.domain.TopTaskSurvey;
-import ca.gc.tbs.domain.User;
-import ca.gc.tbs.repository.TopTaskRepository;
-import ca.gc.tbs.security.JWTUtil;
-import ca.gc.tbs.service.ProblemDateService;
-import ca.gc.tbs.service.UserService;
 
 @Controller
 public class TopTaskController {
@@ -69,6 +66,13 @@ public class TopTaskController {
 
   private final JWTUtil jwtUtil;
 
+  private final SurveyFieldValues surveyFieldValues;
+
+  // Distinct task counts by filter. Paging and sorting don't change them, and computing one reads
+  // every matching row (about 1.6 s for all dates).
+  private final Cache<String, Integer> distinctTaskCounts =
+      Caffeine.newBuilder().expireAfterWrite(Duration.ofMinutes(5)).maximumSize(1000).build();
+
   public TopTaskController(
       TopTaskRepository topTaskRepository,
       UserService userService,
@@ -80,7 +84,9 @@ public class TopTaskController {
     this.problemDateService = problemDateService;
     this.mongoTemplate = mongoTemplate;
     this.jwtUtil = jwtUtil;
+    this.surveyFieldValues = new SurveyFieldValues(mongoTemplate);
   }
+
   private static final Map<String, List<String>> institutionMappings = new HashMap<>();
 
   static {
@@ -131,6 +137,8 @@ public class TopTaskController {
             "ASFC",
             "CANADA BORDER SERVICES AGENCY",
             "AGENCE DES SERVICES FRONTALIERS DU CANADA",
+            "CBSA / ASF",
+            "CBSA / ${survey-task2-institution-fr}",
             "CBSA / ASFC"));
     institutionMappings.put(
         "CCG",
@@ -203,6 +211,7 @@ public class TopTaskController {
             "SCC",
             "CORRECTIONAL SERVICE CANADA",
             "SERVICE CORRECTIONNEL CANADA",
+            "CSC / ${survey-task2-institution-fr}",
             "CSC / SCC"));
     institutionMappings.put(
         "CSE",
@@ -231,7 +240,12 @@ public class TopTaskController {
     institutionMappings.put(
         "DFO",
         Arrays.asList(
-            "DFO", "MPO", "FISHERIES AND OCEANS CANADA", "PÊCHES ET OCÉANS CANADA", "DFO / MPO"));
+            "DFO",
+            "MPO",
+            "FISHERIES AND OCEANS CANADA",
+            "PÊCHES ET OCÉANS CANADA",
+            "DFO / ${survey-task2-institution-fr}",
+            "DFO / MPO"));
     institutionMappings.put(
         "DND", Arrays.asList("DND", "MDN", "NATIONAL DEFENCE", "DÉFENSE NATIONALE", "DND / MDN"));
     institutionMappings.put(
@@ -242,6 +256,14 @@ public class TopTaskController {
             "ENVIRONMENT AND CLIMATE CHANGE CANADA",
             "ENVIRONNEMENT ET CHANGEMENT CLIMATIQUE CANADA",
             "ECCC / ECCC"));
+    institutionMappings.put(
+        "ELECTIONS",
+        Arrays.asList(
+            "ELECTIONS",
+            "ÉLECTIONS",
+            "ELECTIONS CANADA",
+            "ÉLECTIONS CANADA",
+            "ELECTIONS / ÉLECTIONS"));
     institutionMappings.put(
         "ESDC",
         Arrays.asList(
@@ -259,6 +281,14 @@ public class TopTaskController {
             "AGENCE DE LA CONSOMMATION EN MATIÈRE FINANCIÈRE DU CANADA",
             "FCAC / ACFC"));
     institutionMappings.put(
+        "FEDDEV",
+        Arrays.asList(
+            "FEDDEV",
+            "FEDDEV ONTARIO",
+            "FEDERAL ECONOMIC DEVELOPMENT AGENCY FOR SOUTHERN ONTARIO",
+            "AGENCE FÉDÉRALE DE DÉVELOPPEMENT ÉCONOMIQUE POUR LE SUD DE L’ONTARIO",
+            "FEDDEV / FEDDEV"));
+    institutionMappings.put(
         "FIN",
         Arrays.asList(
             "FIN",
@@ -270,9 +300,22 @@ public class TopTaskController {
             "MINISTÈRE DES FINANCES",
             "FIN / FIN"));
     institutionMappings.put(
+        "FINTRAC",
+        Arrays.asList(
+            "FINTRAC",
+            "CANAFE",
+            "FINANCIAL TRANSACTIONS AND REPORTS ANALYSIS CENTRE OF CANADA",
+            "CENTRE D’ANALYSE DES OPÉRATIONS ET DÉCLARATIONS FINANCIÈRES DU CANADA",
+            "FINTRAC / CANAFE"));
+    institutionMappings.put(
         "GAC",
         Arrays.asList(
-            "GAC", "AMC", "GLOBAL AFFAIRS CANADA", "AFFAIRES MONDIALES CANADA", "GAC / AMC"));
+            "GAC",
+            "AMC",
+            "GLOBAL AFFAIRS CANADA",
+            "AFFAIRES MONDIALES CANADA",
+            "GAC / ${survey-task2-institution-fr}",
+            "GAC / AMC"));
     institutionMappings.put(
         "HC", Arrays.asList("HC", "SC", "HEALTH CANADA", "SANTÉ CANADA", "HC / SC"));
     institutionMappings.put(
@@ -302,6 +345,8 @@ public class TopTaskController {
             "IRCC",
             "IMMIGRATION, REFUGEES AND CITIZENSHIP CANADA",
             "IMMIGRATION, RÉFUGIÉS ET CITOYENNETÉ CANADA",
+            "IRCC (IRCC) / IRCC (IRCC)",
+            "IRCC / ${survey-task2-institution-fr}",
             "IRCC / IRCC"));
     institutionMappings.put(
         "ISC",
@@ -330,6 +375,7 @@ public class TopTaskController {
             "BAC",
             "LIBRARY AND ARCHIVES CANADA",
             "BIBLIOTHÈQUE ET ARCHIVES CANADA",
+            "LAC / ${survey-task2-institution-fr}",
             "LAC / BAC"));
     institutionMappings.put(
         "NFB",
@@ -377,6 +423,13 @@ public class TopTaskController {
             "BUREAU DU SURINTENDANT DES FAILLITES CANADA",
             "OSB / BSF"));
     institutionMappings.put(
+        "PACIFICAN",
+        Arrays.asList(
+            "PACIFICAN",
+            "PACIFIC ECONOMIC DEVELOPMENT CANADA",
+            "DÉVELOPPEMENT ÉCONOMIQUE CANADA POUR LE PACIFIQUE",
+            "PACIFICAN / PACIFICAN"));
+    institutionMappings.put(
         "PBC",
         Arrays.asList(
             "PBC",
@@ -400,7 +453,15 @@ public class TopTaskController {
             "ASPC",
             "PUBLIC HEALTH AGENCY OF CANADA",
             "AGENCE DE LA SANTÉ PUBLIQUE DU CANADA",
+            "PHAC / ${survey-task2-institution-fr}",
             "PHAC / ASPC"));
+    institutionMappings.put(
+        "PRAIRIESCAN",
+        Arrays.asList(
+            "PRAIRIESCAN",
+            "PRAIRIES ECONOMIC DEVELOPMENT CANADA",
+            "DÉVELOPPEMENT ÉCONOMIQUE CANADA POUR LES PRAIRIES",
+            "PRAIRIESCAN / PRAIRIESCAN"));
     institutionMappings.put(
         "PS",
         Arrays.asList("PS", "SP", "PUBLIC SAFETY CANADA", "SÉCURITÉ PUBLIQUE CANADA", "PS / SP"));
@@ -421,7 +482,17 @@ public class TopTaskController {
             "SERVICES PUBLICS ET APPROVISIONNEMENT CANADA",
             "GOUVERNEMENT DU CANADA, SERVICES PUBLICS ET APPROVISIONNEMENT CANADA",
             "GOVERNMENT OF CANADA, PUBLIC SERVICES AND PROCUREMENT CANADA",
+            "PSPC / PSPC",
+            "PSPC / ${survey-task2-institution-fr}",
             "PSPC / SPAC"));
+    institutionMappings.put(
+        "PSPC-OL",
+        Arrays.asList(
+            "PSPC-OL",
+            "SPAC-NL",
+            "GOVERNMENT OF CANADA, PUBLIC SERVICES AND PROCUREMENT CANADA, TRANSLATION BUREAU",
+            "GOUVERNEMENT DU CANADA, SERVICES PUBLICS ET APPROVISIONNEMENT CANADA, BUREAU DE LA TRADUCTION",
+            "PSPC-OL / SPAC-NL"));
     institutionMappings.put(
         "RCMP",
         Arrays.asList(
@@ -459,6 +530,7 @@ public class TopTaskController {
             "STATISTICS CANADA",
             "STATISTIQUE CANADA",
             "StatCan / StatCan",
+            "StatCan / ${survey-task2-institution-fr}",
             "STATCAN / STATCAN"));
     institutionMappings.put(
         "TBS",
@@ -504,7 +576,9 @@ public class TopTaskController {
     return String.valueOf(totalTaskCount);
   }
 
-  @RequestMapping(value = "/topTaskData", method = {RequestMethod.GET, RequestMethod.POST})
+  @RequestMapping(
+      value = "/topTaskData",
+      method = {RequestMethod.GET, RequestMethod.POST})
   @ResponseBody
   public DataTablesOutput<TopTaskSurvey> list(
       @Valid DataTablesInput input, HttpServletRequest request) {
@@ -513,7 +587,7 @@ public class TopTaskController {
     String departmentFilterVal = request.getParameter("department");
     String themeFilterVal = request.getParameter("theme");
     if (themeFilterVal != null) {
-        themeFilterVal = themeFilterVal.trim().replaceAll("\\s+", " ");
+      themeFilterVal = themeFilterVal.trim().replaceAll("\\s+", " ");
     }
     String[] taskFilterVals = request.getParameterValues("tasks[]");
     String startDateVal = request.getParameter("startDate");
@@ -521,7 +595,8 @@ public class TopTaskController {
     String groupFilterVal = request.getParameter("group");
     String language = request.getParameter("language");
     String includeCommentsOnlyParam = request.getParameter("includeCommentsOnly");
-    boolean includeCommentsOnly = includeCommentsOnlyParam != null && includeCommentsOnlyParam.equals("true");
+    boolean includeCommentsOnly =
+        includeCommentsOnlyParam != null && includeCommentsOnlyParam.equals("true");
     String taskCompletionFilterVal = request.getParameter("taskCompletion");
     String comments = request.getParameter("comments");
 
@@ -536,7 +611,7 @@ public class TopTaskController {
       criteria.and("language").is(language);
     }
     if (themeFilterVal != null && !themeFilterVal.isEmpty()) {
-      criteria.and("theme").regex(Pattern.quote(themeFilterVal), "i");
+      applyThemeFilter(criteria, themeFilterVal);
     }
     if (groupFilterVal != null && !groupFilterVal.isEmpty()) {
       criteria.and("grouping").is(groupFilterVal);
@@ -572,280 +647,161 @@ public class TopTaskController {
     } else if (!combinedOrCriteria.isEmpty()) {
       criteria.orOperator(combinedOrCriteria.toArray(new Criteria[0]));
     }
-    //taskCompletion filter
-      if (taskCompletionFilterVal != null && !taskCompletionFilterVal.isEmpty()) {
-          List<String> allowed = new ArrayList<>();
-          if (taskCompletionFilterVal.equals("Yes")) {
-              allowed.add("Yes / Oui");
-          } else if (taskCompletionFilterVal.equals("No")) {
-              allowed.add("No / Non");
-          } else if (taskCompletionFilterVal.equals("I started this survey before I finished my visit")) {
-              allowed.add("I started this survey before I finished my visit / J’ai commencé ce sondage avant d’avoir terminé ma visite");
-          }
-          if (!allowed.isEmpty()) {
-              criteria.and("taskCompletion").in(allowed);
-          }
+    // taskCompletion filter
+    if (taskCompletionFilterVal != null && !taskCompletionFilterVal.isEmpty()) {
+      List<String> allowed = new ArrayList<>();
+      if (taskCompletionFilterVal.equals("Yes")) {
+        allowed.add("Yes / Oui");
+      } else if (taskCompletionFilterVal.equals("No")) {
+        allowed.add("No / Non");
+      } else if (taskCompletionFilterVal.equals(
+          "I started this survey before I finished my visit")) {
+        allowed.add(
+            "I started this survey before I finished my visit / J’ai commencé ce sondage avant d’avoir terminé ma visite");
       }
-      // Comments filtering
-      if (comments != null && !comments.trim().isEmpty() && !"null".equalsIgnoreCase(comments. trim())) {
-          String escapedComment = escapeSpecialRegexCharacters(comments.trim());
-          List<Criteria> commentCriteria = new ArrayList<>();
-          commentCriteria.add(Criteria.where("taskImproveComment").regex(escapedComment, "i"));
-          commentCriteria.add(Criteria.where("taskWhyNotComment").regex(escapedComment, "i"));
-          commentCriteria.add(Criteria.where("taskOther").regex(escapedComment, "i"));
-
-          criteria.andOperator(new Criteria().andOperator(criteria, new Criteria().orOperator(commentCriteria.toArray(new Criteria[0]))));
+      if (!allowed.isEmpty()) {
+        criteria.and("taskCompletion").in(allowed);
       }
+    }
+    // Comments filtering
+    if (comments != null
+        && !comments.trim().isEmpty()
+        && !"null".equalsIgnoreCase(comments.trim())) {
+      String escapedComment = RegexUtils.literal(comments.trim());
+      List<Criteria> commentCriteria = new ArrayList<>();
+      commentCriteria.add(Criteria.where("taskImproveComment").regex(escapedComment, "i"));
+      commentCriteria.add(Criteria.where("taskWhyNotComment").regex(escapedComment, "i"));
+      commentCriteria.add(Criteria.where("taskOther").regex(escapedComment, "i"));
 
+      criteria =
+          new Criteria()
+              .andOperator(
+                  criteria, new Criteria().orOperator(commentCriteria.toArray(new Criteria[0])));
+    }
 
-    List<Map> distinctTaskCounts = topTaskRepository.findDistinctTaskCountsWithFilters(criteria);
-    totalDistinctTasks = distinctTaskCounts.size();
+    final Criteria filters = criteria;
+    totalDistinctTasks =
+        distinctTaskCounts.get(
+            filters.getCriteriaObject().toJson(),
+            key -> topTaskRepository.findDistinctTaskCountsWithFilters(filters).size());
 
     // Use estimatedDocumentCount (metadata-based, instant) when no filters are applied,
     // to avoid an expensive count query against CosmosDB.
-    boolean isFiltered = (startDateVal != null && endDateVal != null)
-        || (language != null && !language.isEmpty())
-        || (departmentFilterVal != null && !departmentFilterVal.isEmpty())
-        || (themeFilterVal != null && !themeFilterVal.isEmpty())
-        || (groupFilterVal != null && !groupFilterVal.isEmpty())
-        || (taskFilterVals != null && taskFilterVals.length > 0)
-        || (taskCompletionFilterVal != null && !taskCompletionFilterVal.isEmpty())
-        || (comments != null && !comments.trim().isEmpty() && !"null".equalsIgnoreCase(comments.trim()))
-        || includeCommentsOnly;
-    long cachedCount = isFiltered ? -1
-        : mongoTemplate.getCollection("toptasksurvey").estimatedDocumentCount();
-    DataTablesOutput<TopTaskSurvey> results = topTaskRepository.findAll(input, criteria, cachedCount);
+    boolean isFiltered =
+        (startDateVal != null && endDateVal != null)
+            || (language != null && !language.isEmpty())
+            || (departmentFilterVal != null && !departmentFilterVal.isEmpty())
+            || (themeFilterVal != null && !themeFilterVal.isEmpty())
+            || (groupFilterVal != null && !groupFilterVal.isEmpty())
+            || (taskFilterVals != null && taskFilterVals.length > 0)
+            || (taskCompletionFilterVal != null && !taskCompletionFilterVal.isEmpty())
+            || (comments != null
+                && !comments.trim().isEmpty()
+                && !"null".equalsIgnoreCase(comments.trim()))
+            || includeCommentsOnly;
+    long cachedCount =
+        isFiltered ? -1 : mongoTemplate.getCollection("toptasksurvey").estimatedDocumentCount();
+    DataTablesOutput<TopTaskSurvey> results =
+        topTaskRepository.findAll(input, criteria, cachedCount);
 
     totalTaskCount = (int) results.getRecordsFiltered();
     return results;
   }
 
+  private static final String[] EXPORT_COLUMNS = {
+    "Date Time",
+    "Time Stamp (UTC)",
+    "Survey Referrer",
+    "Language",
+    "Device",
+    "Screener",
+    "Department",
+    "Theme",
+    "Theme Other",
+    "Grouping",
+    "Task",
+    "Task Other",
+    "Task Satisfaction",
+    "Task Ease",
+    "Task Completion",
+    "Task Improve",
+    "Task Improve Comment",
+    "Task Why Not",
+    "Task Why Not Comment",
+    "Task Sampling",
+    "Sampling Invitation",
+    "Sampling GC",
+    "Sampling Canada",
+    "Sampling Theme",
+    "Sampling Institution",
+    "Sampling Grouping",
+    "Sampling Task"
+  };
+
+  private static final StreamingExport<TopTaskSurvey> EXPORT =
+      new StreamingExport<>(
+          "Top task survey",
+          EXPORT_COLUMNS,
+          TopTaskController::exportValues,
+          UnaryOperator.identity(),
+          StreamingExport.WhenEmpty.NO_CONTENT);
+
   @GetMapping("/exportTopTaskExcel")
   public void exportTopTaskExcel(HttpServletRequest request, HttpServletResponse response)
       throws IOException {
-    LOG.info("Starting Excel export...");
-
-    try {
-      DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-      String currentDate = LocalDate.now().format(dateFormatter);
-
-      // Build criteria from request parameters
-      Criteria criteria = buildExportCriteria(request);
-      Query query = buildExportQuery(criteria);
-
-      // Check if we have any data before proceeding
-      long count = mongoTemplate.count(query, TopTaskSurvey.class);
-      LOG.info("Found {} records to export", count);
-
-      if (count == 0) {
-        LOG.warn("No data found for export with the given criteria");
-        response.setStatus(HttpServletResponse.SC_NO_CONTENT);
-        response.getWriter().write("No data found for export");
-        return;
-      }
-
-      // Set response headers after confirming we have data
-      response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-      String filename = "top_task_survey_export_" + currentDate + ".xlsx";
-      response.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
-      response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-      response.setHeader("Pragma", "no-cache");
-      response.setHeader("Expires", "0");
-
-      SXSSFWorkbook workbook = new SXSSFWorkbook(100);
-      Sheet sheet = workbook.createSheet("Top Task Survey Data");
-
-      // Create header row
-      String[] columns = {
-        "Date Time",
-        "Time Stamp (UTC)",
-        "Survey Referrer",
-        "Language",
-        "Device",
-        "Screener",
-        "Department",
-        "Theme",
-        "Theme Other",
-        "Grouping",
-        "Task",
-        "Task Other",
-        "Task Satisfaction",
-        "Task Ease",
-        "Task Completion",
-        "Task Improve",
-        "Task Improve Comment",
-        "Task Why Not",
-        "Task Why Not Comment",
-        "Task Sampling",
-        "Sampling Invitation",
-        "Sampling GC",
-        "Sampling Canada",
-        "Sampling Theme",
-        "Sampling Institution",
-        "Sampling Grouping",
-        "Sampling Task"
-      };
-      Row headerRow = sheet.createRow(0);
-      for (int i = 0; i < columns.length; i++) {
-        headerRow.createCell(i).setCellValue(columns[i]);
-      }
-
-      final int[] rowNum = {1};
-      try (ServletOutputStream outputStream = response.getOutputStream();
-           java.util.stream.Stream<TopTaskSurvey> stream = mongoTemplate.stream(query, TopTaskSurvey.class)) {
-        stream.forEach(
-                survey -> {
-                  try {
-                    Row row = sheet.createRow(rowNum[0]++);
-                    row.createCell(0).setCellValue(survey.getDateTime());
-                    row.createCell(1).setCellValue(survey.getTimeStamp());
-                    row.createCell(2).setCellValue(survey.getSurveyReferrer());
-                    row.createCell(3).setCellValue(survey.getLanguage());
-                    row.createCell(4).setCellValue(survey.getDevice());
-                    row.createCell(5).setCellValue(survey.getScreener());
-                    row.createCell(6).setCellValue(survey.getDept());
-                    row.createCell(7).setCellValue(survey.getTheme());
-                    row.createCell(8).setCellValue(survey.getThemeOther());
-                    row.createCell(9).setCellValue(survey.getGrouping());
-                    row.createCell(10).setCellValue(survey.getTask());
-                    row.createCell(11).setCellValue(survey.getTaskOther());
-                    row.createCell(12).setCellValue(survey.getTaskSatisfaction());
-                    row.createCell(13).setCellValue(survey.getTaskEase());
-                    row.createCell(14).setCellValue(survey.getTaskCompletion());
-                    row.createCell(15).setCellValue(survey.getTaskImprove());
-                    row.createCell(16).setCellValue(survey.getTaskImproveComment());
-                    row.createCell(17).setCellValue(survey.getTaskWhyNot());
-                    row.createCell(18).setCellValue(survey.getTaskWhyNotComment());
-                    row.createCell(19).setCellValue(survey.getTaskSampling());
-                    row.createCell(20).setCellValue(survey.getSamplingInvitation());
-                    row.createCell(21).setCellValue(survey.getSamplingGC());
-                    row.createCell(22).setCellValue(survey.getSamplingCanada());
-                    row.createCell(23).setCellValue(survey.getSamplingTheme());
-                    row.createCell(24).setCellValue(survey.getSamplingInstitution());
-                    row.createCell(25).setCellValue(survey.getSamplingGrouping());
-                    row.createCell(26).setCellValue(survey.getSamplingTask());
-
-                    if (rowNum[0] % 100 == 0) {
-                      ((SXSSFSheet) sheet).flushRows(100);
-                      LOG.debug("Flushed {} rows", rowNum[0]);
-                    }
-                  } catch (Exception e) {
-                    LOG.error("Error writing row {}: {}", rowNum[0], e.getMessage());
-                  }
-                });
-
-        LOG.info("Writing {} rows to Excel file", rowNum[0] - 1);
-        workbook.write(outputStream);
-        outputStream.flush();
-        LOG.info("Excel export completed successfully");
-      } catch (Exception e) {
-        LOG.error("Error writing to output stream", e);
-        throw e;
-      } finally {
-        workbook.dispose();
-        workbook.close();
-      }
-    } catch (Exception e) {
-      LOG.error("Error exporting Excel", e);
-      response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-      response.getWriter().write("Error exporting data: " + e.getMessage());
-    }
+    EXPORT.writeExcel(
+        () -> streamExportRows(request),
+        contentDisposition("xlsx"),
+        "Top Task Survey Data",
+        response);
   }
 
   @GetMapping("/exportTopTaskCSV")
   public void exportTopTaskCSV(HttpServletRequest request, HttpServletResponse response)
       throws IOException {
-    LOG.info("Starting CSV export...");
+    EXPORT.writeCsv(() -> streamExportRows(request), contentDisposition("csv"), request, response);
+  }
 
-    try {
-      DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-      String currentDate = LocalDate.now().format(dateFormatter);
+  private Stream<TopTaskSurvey> streamExportRows(HttpServletRequest request) {
+    return mongoTemplate.stream(
+        StreamingExport.exportQuery(buildExportCriteria(request)), TopTaskSurvey.class);
+  }
 
-      // Build criteria from request parameters
-      Criteria criteria = buildExportCriteria(request);
-      Query query = buildExportQuery(criteria);
+  private static String contentDisposition(String extension) {
+    String currentDate = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+    return "attachment; filename=\"top_task_survey_export_" + currentDate + "." + extension + "\"";
+  }
 
-      // Check if we have any data before proceeding
-      long count = mongoTemplate.count(query, TopTaskSurvey.class);
-      LOG.info("Found {} records to export", count);
-
-      if (count == 0) {
-        LOG.warn("No data found for export with the given criteria");
-        response.setStatus(HttpServletResponse.SC_NO_CONTENT);
-        response.getWriter().write("No data found for export");
-        return;
-      }
-
-      // Set response headers after confirming we have data
-      response.setContentType("text/csv");
-      String filename = "top_task_survey_export_" + currentDate + ".csv";
-      response.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
-      response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-      response.setHeader("Pragma", "no-cache");
-      response.setHeader("Expires", "0");
-
-      try (Writer writer = response.getWriter()) {
-        // Write CSV header
-        writer.write(
-            "Date Time,Time Stamp (UTC),Survey"
-                + " Referrer,Language,Device,Screener,Department,Theme,Theme"
-                + " Other,Grouping,Task,Task Other,Task Satisfaction,Task Ease,Task Completion,Task"
-                + " Improve,Task Improve Comment,Task Why Not,Task Why Not Comment,Task"
-                + " Sampling,Sampling Invitation,Sampling GC,Sampling Canada,Sampling"
-                + " Theme,Sampling Institution,Sampling Grouping,Sampling Task\n");
-
-        // Stream and write data
-        try (java.util.stream.Stream<TopTaskSurvey> stream = mongoTemplate.stream(query, TopTaskSurvey.class)) {
-          stream.forEach(
-                survey -> {
-                  try {
-                    writer.write(
-                        String.format(
-                            "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-                            escapeCSV(survey.getDateTime()),
-                            escapeCSV(survey.getTimeStamp()),
-                            escapeCSV(survey.getSurveyReferrer()),
-                            escapeCSV(survey.getLanguage()),
-                            escapeCSV(survey.getDevice()),
-                            escapeCSV(survey.getScreener()),
-                            escapeCSV(survey.getDept()),
-                            escapeCSV(survey.getTheme()),
-                            escapeCSV(survey.getThemeOther()),
-                            escapeCSV(survey.getGrouping()),
-                            escapeCSV(survey.getTask()),
-                            escapeCSV(survey.getTaskOther()),
-                            escapeCSV(survey.getTaskSatisfaction()),
-                            escapeCSV(survey.getTaskEase()),
-                            escapeCSV(survey.getTaskCompletion()),
-                            escapeCSV(survey.getTaskImprove()),
-                            escapeCSV(survey.getTaskImproveComment()),
-                            escapeCSV(survey.getTaskWhyNot()),
-                            escapeCSV(survey.getTaskWhyNotComment()),
-                            escapeCSV(survey.getTaskSampling()),
-                            escapeCSV(survey.getSamplingInvitation()),
-                            escapeCSV(survey.getSamplingGC()),
-                            escapeCSV(survey.getSamplingCanada()),
-                            escapeCSV(survey.getSamplingTheme()),
-                            escapeCSV(survey.getSamplingInstitution()),
-                            escapeCSV(survey.getSamplingGrouping()),
-                            escapeCSV(survey.getSamplingTask())));
-                  } catch (IOException e) {
-                    LOG.error("Error writing CSV row: {}", e.getMessage());
-                  }
-                });
-        }
-
-        writer.flush();
-        LOG.info("CSV export completed successfully");
-      } catch (Exception e) {
-        LOG.error("Error writing to CSV output", e);
-        throw e;
-      }
-    } catch (Exception e) {
-      LOG.error("Error exporting CSV", e);
-      response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-      response.getWriter().write("Error exporting data: " + e.getMessage());
-    }
+  private static String[] exportValues(TopTaskSurvey survey) {
+    return new String[] {
+      survey.getDateTime(),
+      survey.getTimeStamp(),
+      survey.getSurveyReferrer(),
+      survey.getLanguage(),
+      survey.getDevice(),
+      survey.getScreener(),
+      survey.getDept(),
+      survey.getTheme(),
+      survey.getThemeOther(),
+      survey.getGrouping(),
+      survey.getTask(),
+      survey.getTaskOther(),
+      survey.getTaskSatisfaction(),
+      survey.getTaskEase(),
+      survey.getTaskCompletion(),
+      survey.getTaskImprove(),
+      survey.getTaskImproveComment(),
+      survey.getTaskWhyNot(),
+      survey.getTaskWhyNotComment(),
+      survey.getTaskSampling(),
+      survey.getSamplingInvitation(),
+      survey.getSamplingGC(),
+      survey.getSamplingCanada(),
+      survey.getSamplingTheme(),
+      survey.getSamplingInstitution(),
+      survey.getSamplingGrouping(),
+      survey.getSamplingTask()
+    };
   }
 
   // Helper methods for the export endpoints
@@ -872,13 +828,14 @@ public class TopTaskController {
       criteria.and("language").is(language);
     }
     if (theme != null && !theme.isEmpty()) {
-      criteria.and("theme").regex(theme, "i");
+      criteria.and("theme").regex(RegexUtils.literal(theme), "i");
     }
     if (group != null && !group.isEmpty()) {
       criteria.and("grouping").is(group);
     }
     if (department != null && !department.isEmpty()) {
-      criteria.and("dept").regex("^" + Pattern.quote(department) + "$", "i");
+      Criteria departmentCriteria = applyDepartmentFilter(new Criteria(), department);
+      criteria = new Criteria().andOperator(criteria, departmentCriteria);
     }
 
     List<Criteria> combinedOrCriteria = new ArrayList<>();
@@ -900,68 +857,39 @@ public class TopTaskController {
                       taskCriteria,
                       new Criteria().orOperator(nonEmptyCriteria.toArray(new Criteria[0]))));
         }
-        criteria.andOperator(
-            new Criteria().orOperator(commentCriteriaWithTasks.toArray(new Criteria[0])));
+        criteria =
+            new Criteria()
+                .andOperator(
+                    criteria,
+                    new Criteria().orOperator(commentCriteriaWithTasks.toArray(new Criteria[0])));
       } else {
-        criteria.andOperator(new Criteria().orOperator(nonEmptyCriteria.toArray(new Criteria[0])));
+        criteria =
+            new Criteria()
+                .andOperator(
+                    criteria, new Criteria().orOperator(nonEmptyCriteria.toArray(new Criteria[0])));
       }
     } else if (!combinedOrCriteria.isEmpty()) {
-      criteria.andOperator(new Criteria().orOperator(combinedOrCriteria.toArray(new Criteria[0])));
+      criteria =
+          new Criteria()
+              .andOperator(
+                  criteria, new Criteria().orOperator(combinedOrCriteria.toArray(new Criteria[0])));
     }
 
-      if (comments != null && !comments.isEmpty()) {
-          String escapedComment = escapeSpecialRegexCharacters(comments);
-          List<Criteria> commentCriteria = new ArrayList<>();
-          commentCriteria.add(Criteria.where("taskImproveComment").regex(escapedComment, "i"));
-          commentCriteria.add(Criteria.where("taskWhyNotComment").regex(escapedComment, "i"));
-          commentCriteria.add(Criteria.where("themeOther").regex(escapedComment, "i"));
-          commentCriteria.add(Criteria. where("taskOther").regex(escapedComment, "i"));
+    if (comments != null && !comments.isEmpty()) {
+      String escapedComment = RegexUtils.literal(comments);
+      List<Criteria> commentCriteria = new ArrayList<>();
+      commentCriteria.add(Criteria.where("taskImproveComment").regex(escapedComment, "i"));
+      commentCriteria.add(Criteria.where("taskWhyNotComment").regex(escapedComment, "i"));
+      commentCriteria.add(Criteria.where("themeOther").regex(escapedComment, "i"));
+      commentCriteria.add(Criteria.where("taskOther").regex(escapedComment, "i"));
 
-          criteria.andOperator(new Criteria().andOperator(criteria, new Criteria().orOperator(commentCriteria.toArray(new Criteria[0]))));
-      }
+      criteria =
+          new Criteria()
+              .andOperator(
+                  criteria, new Criteria().orOperator(commentCriteria.toArray(new Criteria[0])));
+    }
 
     return criteria;
-  }
-
-  private Query buildExportQuery(Criteria criteria) {
-    Query query = new Query(criteria);
-    query
-        .fields()
-        .include("dateTime")
-        .include("timeStamp")
-        .include("surveyReferrer")
-        .include("language")
-        .include("device")
-        .include("screener")
-        .include("dept")
-        .include("theme")
-        .include("themeOther")
-        .include("grouping")
-        .include("task")
-        .include("taskOther")
-        .include("taskSatisfaction")
-        .include("taskEase")
-        .include("taskCompletion")
-        .include("taskImprove")
-        .include("taskImproveComment")
-        .include("taskWhyNot")
-        .include("taskWhyNotComment")
-        .include("taskSampling")
-        .include("samplingInvitation")
-        .include("samplingGC")
-        .include("samplingCanada")
-        .include("samplingTheme")
-        .include("samplingInstitution")
-        .include("samplingGrouping")
-        .include("samplingTask");
-    return query;
-  }
-
-  private String escapeCSV(String value) {
-    if (value == null) {
-      return "";
-    }
-    return "\"" + value.replace("\"", "\"\"") + "\"";
   }
 
   private List<Criteria> createNonEmptyCriteria() {
@@ -997,7 +925,6 @@ public class TopTaskController {
             (a, b) -> a.get("display").compareToIgnoreCase(b.get("display"))) // Sort alphabetically
         .collect(Collectors.toList());
   }
-
 
   @GetMapping("/api/toptasks")
   public ResponseEntity<?> getProblemsJson(
@@ -1120,7 +1047,7 @@ public class TopTaskController {
 
     if (url != null && !url.isEmpty()) {
       System.out.println("URL: " + url);
-      criteria.and("surveyReferrer").regex(url, "i");
+      criteria.and("surveyReferrer").regex(RegexUtils.literal(url), "i");
     }
     Query query = new Query(criteria);
     query
@@ -1136,24 +1063,43 @@ public class TopTaskController {
 
   private Criteria applyDepartmentFilter(Criteria criteria, String department) {
     List<String> variations = new ArrayList<>();
-      for (Map.Entry<String, List<String>> entry : institutionMappings.entrySet()) {
-          List<String> mappingValues = entry.getValue();
-          if (mappingValues.stream().anyMatch(v -> v.equalsIgnoreCase(department))) {
-              variations.addAll(mappingValues);
-              break;
-          }
+    for (Map.Entry<String, List<String>> entry : institutionMappings.entrySet()) {
+      List<String> mappingValues = entry.getValue();
+      if (mappingValues.stream().anyMatch(v -> v.equalsIgnoreCase(department))) {
+        variations.addAll(mappingValues);
+        break;
       }
-      if (variations.isEmpty()) {
-    criteria.and("dept").regex("^" + Pattern.quote(department) + "$", "i");
-      } else {
-          List<Criteria> deptCriteria = new ArrayList<>();
-          for (String variation :  variations) {
-              deptCriteria.add(Criteria.where("dept").regex("^" + Pattern.quote(variation) + "$", "i"));
-          }
-          criteria.orOperator(deptCriteria.toArray(new Criteria[0]));
-      }
+    }
+    List<String> names = variations.isEmpty() ? List.of(department) : variations;
 
+    // Match the stored spellings exactly: Cosmos DB reads every row for a case-insensitive regex
+    List<String> storedSpellings = surveyFieldValues.equalToAnyIgnoringCase("dept", names);
+    if (!storedSpellings.isEmpty()) {
+      criteria.and("dept").in(storedSpellings);
       return criteria;
+    }
+
+    // No stored spelling matches (yet), so the regex still finds rows newer than the list
+    if (variations.isEmpty()) {
+      criteria.and("dept").regex("^" + Pattern.quote(department) + "$", "i");
+    } else {
+      List<Criteria> deptCriteria = new ArrayList<>();
+      for (String variation : variations) {
+        deptCriteria.add(Criteria.where("dept").regex("^" + Pattern.quote(variation) + "$", "i"));
+      }
+      criteria.orOperator(deptCriteria.toArray(new Criteria[0]));
+    }
+    return criteria;
+  }
+
+  // Match the stored themes exactly when possible, for the same reason as departments
+  private void applyThemeFilter(Criteria criteria, String theme) {
+    List<String> storedThemes = surveyFieldValues.containingIgnoringCase("theme", theme);
+    if (storedThemes.isEmpty()) {
+      criteria.and("theme").regex(Pattern.quote(theme), "i");
+    } else {
+      criteria.and("theme").in(storedThemes);
+    }
   }
 
   @GetMapping(value = "/topTaskSurvey")
@@ -1198,7 +1144,7 @@ public class TopTaskController {
     // Apply theme filter
     if (theme != null && !theme.isEmpty()) {
       String cleanedTheme = theme.trim().replaceAll("\\s+", " ");
-      criteria.and("theme").regex(Pattern.quote(cleanedTheme), "i");
+      applyThemeFilter(criteria, cleanedTheme);
     }
 
     // Apply group filter
@@ -1225,13 +1171,4 @@ public class TopTaskController {
           .collect(Collectors.toList());
     }
   }
-
-  private String escapeSpecialRegexCharacters(String input) {
-      if (input == null) {
-          return null;
-      }
-      // Escape all regex metacharacters
-      return input.replaceAll("([\\\\.|^$|()\\[\\]{}*+?])", "\\\\$1");
-  }
-
 }
