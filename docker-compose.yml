@@ -1,0 +1,62 @@
+# Local development stack: `docker-compose up`, then open http://localhost:8080.
+# Builds and runs the app from source with the local profile against the local MongoDB, so no
+# secrets are needed. The prod image is built separately from docker/Dockerfile by CI.
+#
+# The feedback-cj's docker-compose.yml uses the same project name, so locally the two
+# repos share one MongoDB, like prod: whichever starts first creates it, and rows the
+# cron job processes show up here on refresh.
+name: pagesuccess
+
+services:
+  # Keep this service identical to the one in the feedback-cj's docker-compose.yml, or
+  # starting either stack restarts the shared database.
+  mongodb:
+    image: mongo:7.0
+    # Keeps its logs out of `up`, and lets the cron job's `up` return once the job is done.
+    attach: false
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    image: maven:3.9.15-eclipse-temurin-21
+    working_dir: /app
+    # Serves templates and static files straight from src/main/resources (edits show on
+    # refresh) and recompiles Java on save, which triggers a devtools restart.
+    command: sh docker/dev.sh
+    ports:
+      - "8080:8080"
+      - "8000:8000" # remote debugger
+    volumes:
+      - .:/app
+      - maven_repo:/root/.m2
+      - /app/target # keep container build output out of the host's target/
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      # Inside docker-compose the database's host name is "mongodb", not localhost.
+      SPRING_DATA_MONGODB_URI: mongodb://mongodb:27017/pagesuccess
+      # docker/dev.sh recompiles on save and relies on devtools to restart the app.
+      SPRING_DEVTOOLS_RESTART_ENABLED: "true"
+      SPRING_DEVTOOLS_RESTART_TRIGGER_FILE: .reloadtrigger
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # Formatters for everything but Java, for `make fmt` / `make fmt-check`.
+  # The profile keeps `docker-compose up` from starting it.
+  fmt:
+    build: docker/fmt
+    profiles: [tools]
+    working_dir: /app
+    volumes:
+      - .:/app
+
+volumes:
+  mongodb_data:
+  maven_repo:

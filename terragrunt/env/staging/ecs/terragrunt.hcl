@@ -46,7 +46,8 @@ dependency "ssm" {
   mock_outputs_allowed_terraform_commands = ["init", "fmt", "validate", "plan", "show"]
   mock_outputs_merge_with_state           = true
   mock_outputs = {
-    jwt_secret_key_arn = ""
+    jwt_secret_key_arn         = ""
+    gc_ip_filter_whitelist_arn = ""
   }
 }
 
@@ -79,7 +80,8 @@ inputs = {
   docdb_password_arn = local.env_vars.inputs.dto_feedback_cj_docdb_password_arn
 
   # Secrets
-  jwt_secret_key_arn = dependency.ssm.outputs.jwt_secret_key_arn
+  jwt_secret_key_arn         = dependency.ssm.outputs.jwt_secret_key_arn
+  gc_ip_filter_whitelist_arn = dependency.ssm.outputs.gc_ip_filter_whitelist_arn
 }
 
 include {

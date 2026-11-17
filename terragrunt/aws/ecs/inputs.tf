@@ -82,3 +82,8 @@ variable "jwt_secret_key_arn" {
   description = "SSM parameter ARN for JWT secret key"
   type        = string
 }
+
+variable "gc_ip_filter_whitelist_arn" {
+  description = "SSM parameter ARN for the GC IP filter allowlist"
+  type        = string
+}

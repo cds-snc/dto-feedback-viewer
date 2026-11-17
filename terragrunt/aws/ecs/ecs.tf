@@ -41,6 +41,10 @@ module "feedback_viewer" {
     {
       name      = "JWT_SECRET_KEY"
       valueFrom = var.jwt_secret_key_arn
+    },
+    {
+      name      = "GC_IP_FILTER_WHITELIST"
+      valueFrom = var.gc_ip_filter_whitelist_arn
     }
   ]
   container_environment = [
@@ -49,30 +53,27 @@ module "feedback_viewer" {
       value = "mongodb://$${SPRING_DATA_MONGODB_USERNAME}:$${SPRING_DATA_MONGODB_PASSWORD}@${var.docdb_endpoint}:27017/pagesuccess?ssl=true&retryWrites=false&tlsAllowInvalidHostnames=true"
     },
     {
-      name  = "SERVER_FORWARD_HEADERS_STRATEGY"
-      value = "FRAMEWORK"
+      name  = "SPRING_PROFILES_ACTIVE"
+      value = "prod"
     },
     {
-      name  = "MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE"
-      value = "health"
+      name  = "SERVER_PORT"
+      value = "3001"
     },
     {
-      name  = "MANAGEMENT_ENDPOINTS_WEB_BASE_PATH"
-      value = "/"
-    },
-    {
-      name  = "MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS"
-      value = "always"
-    },
-    {
-      name  = "MANAGEMENT_HEALTH_DEFAULTS_ENABLED"
+      name  = "GC_IP_FILTER_ENABLED"
       value = "true"
+    },
+    {
+      # The ALB appends the real client IP as the last X-Forwarded-For entry.
+      name  = "GC_IP_FILTER_CLIENT_IP_SOURCE"
+      value = "X_FORWARDED_FOR_LAST"
     }
   ]
-  # Container health check - ECS won't mark the container healthy until /health returns 0.
+  # Container health check - ECS won't mark the container healthy until /actuator/health returns 0.
   # startPeriod gives the JVM/Spring 60s to boot before failures are counted.
   container_health_check = {
-    command     = ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3001/health || exit 1"]
+    command     = ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3001/actuator/health || exit 1"]
     interval    = 15
     timeout     = 5
     retries     = 3

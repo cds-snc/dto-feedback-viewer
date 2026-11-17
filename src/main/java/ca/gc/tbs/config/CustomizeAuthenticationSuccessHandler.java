@@ -5,10 +5,11 @@
  */
 package ca.gc.tbs.config;
 
-import java.io.IOException;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.net.URI;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.web.authentication.SimpleUrlAuthenticationSuccessHandler;
@@ -31,7 +32,9 @@ public class CustomizeAuthenticationSuccessHandler extends SimpleUrlAuthenticati
 
     SavedRequest savedRequest = requestCache.getRequest(request, response);
 
-    if (savedRequest == null || savedRequest.getRedirectUrl().contains("signin")) {
+    if (savedRequest == null
+        || savedRequest.getRedirectUrl().contains("signin")
+        || !isSameOrigin(savedRequest.getRedirectUrl(), request)) {
       for (GrantedAuthority auth : authentication.getAuthorities()) {
         if ("ADMIN".equals(auth.getAuthority())) {
           response.sendRedirect("/u/index");
@@ -45,11 +48,29 @@ public class CustomizeAuthenticationSuccessHandler extends SimpleUrlAuthenticati
 
     // Use the DefaultSavedRequest URL
     String targetUrl = savedRequest.getRedirectUrl();
-    logger.debug("Redirecting to DefaultSavedRequest Url: " + targetUrl);
+    String sanitizedUrlForLog =
+        targetUrl == null ? null : targetUrl.replace('\n', '_').replace('\r', '_');
+    logger.debug("Redirecting to DefaultSavedRequest Url: " + sanitizedUrlForLog);
     getRedirectStrategy().sendRedirect(request, response, targetUrl);
   }
 
   public void setRequestCache(RequestCache requestCache) {
     this.requestCache = requestCache;
+  }
+
+  private boolean isSameOrigin(String url, HttpServletRequest request) {
+    // Browsers treat "//host" and "/\host" as a link to another host
+    if (url.startsWith("//") || url.startsWith("/\\")) {
+      return false;
+    }
+    if (url.startsWith("/")) {
+      return true;
+    }
+    try {
+      URI uri = URI.create(url);
+      return !uri.isAbsolute() || request.getServerName().equalsIgnoreCase(uri.getHost());
+    } catch (IllegalArgumentException e) {
+      return false;
+    }
   }
 }
