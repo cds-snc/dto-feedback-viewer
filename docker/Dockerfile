@@ -1,4 +1,7 @@
 FROM eclipse-temurin:21-jre-alpine
+# Java4Shell (CVE-2026-114938) workaround: turn off the vulnerable Base64 intrinsic.
+# Remove once the base image ships Temurin 21.0.13.1+2 or later.
+ENV JAVA_TOOL_OPTIONS="-XX:-UseBASE64Intrinsics"
 # DocumentDB's TLS certificate is signed by the AWS RDS CA; add it to Java's default truststore,
 # which keeps the public CAs that outbound HTTPS calls (e.g. RDAP) need.
 RUN mkdir /tmp/rds && cd /tmp/rds \
